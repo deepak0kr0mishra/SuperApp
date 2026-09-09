@@ -16,10 +16,42 @@ async function request(method, path, body = null, isFormData = false) {
   if (body) {
     options.body = isFormData ? body : JSON.stringify(body);
   }
-  const res = await fetch(`${BASE_URL}${path}`, options);
+  let res;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, options);
+  } catch (err) {
+    throw new Error('Cannot reach backend. Is the server running? (' + err.message + ')');
+  }
+  const contentType = res.headers.get('content-type') || '';
+  // GitHub Pages serves HTML for unknown paths — that means VITE_SERVER_URL
+  // was not set at build time and the app fell back to same-origin /api.
+  if (!contentType.includes('application/json')) {
+    const preview = (await res.text()).slice(0, 80);
+    if (preview.includes('<html') || preview.includes('<!DOCTYPE')) {
+      throw new Error(
+        'Backend not reachable (got HTML instead of JSON). ' +
+        'The Pages build is calling /api on GitHub itself. ' +
+        'Set the VITE_SERVER_URL repo variable to your Render backend URL and redeploy.'
+      );
+    }
+    throw new Error(`Server returned non-JSON response (status ${res.status}). Is the backend running?`);
+  }
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;
+}
+
+// Warn in console when running on Pages without a backend configured,
+// so the cause is obvious in DevTools.
+if (
+  typeof window !== 'undefined' &&
+  window.location.hostname.endsWith('.github.io') &&
+  (!import.meta.env.VITE_SERVER_URL || !import.meta.env.VITE_API_URL)
+) {
+  console.warn(
+    '[Nebula] VITE_SERVER_URL / VITE_API_URL missing at build time. ' +
+    'Set the VITE_SERVER_URL repository variable and redeploy the Pages workflow.'
+  );
 }
 
 export const api = {

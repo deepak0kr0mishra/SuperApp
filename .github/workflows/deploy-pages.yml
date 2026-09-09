@@ -31,6 +31,14 @@ jobs:
       - name: Install client dependencies
         run: npm ci --prefix client
 
+      - name: Check backend URL configured
+        run: |
+          if [ -z "${{ vars.VITE_SERVER_URL }}" ]; then
+            echo "::error::VITE_SERVER_URL repo variable is NOT set. Go to Settings → Secrets and variables → Actions → Variables and add VITE_SERVER_URL=https://your-backend.onrender.com (no trailing slash)."
+            exit 1
+          fi
+          echo "Backend: ${{ vars.VITE_SERVER_URL }}"
+
       - name: Build client
         run: npm run build --prefix client
         env:
