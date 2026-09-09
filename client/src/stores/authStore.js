@@ -73,5 +73,19 @@ export const useAuthStore = create((set, get) => ({
     set({ user: null, token: null, keyPair: null });
   },
 
+  updateProfile: async (display_name, bio) => {
+    const { user } = await api.updateProfile(display_name, bio);
+    set({ user });
+    return user;
+  },
+
+  refreshMe: async () => {
+    try {
+      const { user } = await api.me();
+      set({ user });
+      return user;
+    } catch { return null; }
+  },
+
   clearError: () => set({ error: null }),
 }));

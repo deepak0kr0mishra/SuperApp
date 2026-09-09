@@ -24,7 +24,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+  limits: { fileSize: 55 * 1024 * 1024 }, // 55MB (50MB file + ~10% encryption overhead)
 });
 
 // POST /api/files/upload — upload an encrypted file blob
@@ -43,6 +43,7 @@ router.post('/upload', authenticateToken, upload.single('file'), (req, res) => {
       uploader_id: req.user.userId,
       room_id: roomId,
       file_name: req.file.originalname,
+      // Store actual size on disk (the encrypted blob size)
       file_size: req.file.size,
       mime_type: req.file.mimetype,
       path: req.file.filename,
@@ -60,22 +61,30 @@ router.post('/upload', authenticateToken, upload.single('file'), (req, res) => {
   }
 });
 
-// GET /api/files/:id — download a file
+// GET /api/files/:id — download an encrypted blob
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const file = fileQueries.findById.get(req.params.id);
     if (!file) return res.status(404).json({ error: 'File not found' });
 
     const filePath = join(UPLOADS_DIR, file.path);
+
+    let fileStat;
     try {
-      await stat(filePath);
+      fileStat = await stat(filePath);
     } catch {
-      return res.status(404).json({ error: 'File data not found' });
+      return res.status(404).json({ error: 'File data not found on disk' });
     }
 
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.file_name)}"`);
-    res.setHeader('Content-Type', file.mime_type);
-    res.setHeader('Content-Length', file.file_size);
+    // FIX: Use actual on-disk size (encrypted blob is larger than original)
+    // Use application/octet-stream since the blob is encrypted binary
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(file.file_name)}"`
+    );
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', fileStat.size);
+
     createReadStream(filePath).pipe(res);
   } catch (err) {
     console.error('Download error:', err);

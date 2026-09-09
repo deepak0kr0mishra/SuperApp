@@ -1,27 +1,24 @@
 import { create } from 'zustand';
-import { api } from '../services/api.js';
 import { getKeyForRoom, encryptText, decryptText, encryptFile, decryptFile } from '../crypto/e2e.js';
 
 export const useChatStore = create((set, get) => ({
   rooms: [],
   activeRoomId: null,
-  messages: {}, // roomId → message[]
-  members: {}, // roomId → member[]
-  typingUsers: {}, // roomId → { userId: username }
-  userStatuses: {}, // userId → 'online' | 'offline'
-  unread: {}, // roomId → count
+  messages: {},       // roomId → message[]
+  members: {},        // roomId → member[]
+  typingUsers: {},    // roomId → { userId: username }
+  userStatuses: {},   // userId → 'online' | 'offline'
+  unread: {},         // roomId → count
   allUsers: [],
 
   setRooms: (rooms) => set({ rooms }),
 
   setAllUsers: (users) => set({ allUsers: users }),
 
-  setActiveRoom: async (roomId) => {
-    set({ activeRoom: roomId, activeRoomId: roomId });
-    // Clear unread
-    set(state => ({
-      unread: { ...state.unread, [roomId]: 0 },
-    }));
+  // FIX: only set activeRoomId (removed spurious activeRoom key)
+  setActiveRoom: (roomId) => {
+    set({ activeRoomId: roomId });
+    set(state => ({ unread: { ...state.unread, [roomId]: 0 } }));
   },
 
   addRoom: (room) => set(state => ({
@@ -38,7 +35,6 @@ export const useChatStore = create((set, get) => ({
 
   appendMessage: (message) => set(state => {
     const roomMessages = state.messages[message.room_id] || [];
-    // Avoid duplicates
     if (roomMessages.find(m => m.id === message.id)) return {};
     return {
       messages: {
@@ -83,24 +79,24 @@ export const useChatStore = create((set, get) => ({
   })),
 
   // --- Crypto helpers ---
-  encryptMessage: async (text, roomId, keyPair) => {
+
+  // FIX: pass real myUserId; await encryptText properly
+  encryptMessage: async (text, roomId, keyPair, myUserId) => {
     const { members, rooms } = get();
     const room = rooms.find(r => r.id === roomId);
     const roomMembers = members[roomId] || [];
-    const myUserId = keyPair?.publicKeyJwk?.x; // Use x component as userId proxy
-
-    // Use userId from auth store
     const key = await getKeyForRoom(
       roomId,
       room?.type || 'channel',
       keyPair.privateKey,
       roomMembers,
-      '__self__'
+      myUserId
     );
-    return encryptText(text, key);
+    return await encryptText(text, key);
   },
 
   decryptMessage: async (encryptedContent, roomId, keyPair, myUserId) => {
+    if (!encryptedContent) return '';
     const { members, rooms } = get();
     const room = rooms.find(r => r.id === roomId);
     const roomMembers = members[roomId] || [];
@@ -112,7 +108,7 @@ export const useChatStore = create((set, get) => ({
         roomMembers,
         myUserId
       );
-      return decryptText(encryptedContent, key);
+      return await decryptText(encryptedContent, key);
     } catch {
       return '[🔒 Unable to decrypt]';
     }
@@ -123,11 +119,8 @@ export const useChatStore = create((set, get) => ({
     const room = rooms.find(r => r.id === roomId);
     const roomMembers = members[roomId] || [];
     const key = await getKeyForRoom(
-      roomId,
-      room?.type || 'channel',
-      keyPair.privateKey,
-      roomMembers,
-      myUserId
+      roomId, room?.type || 'channel',
+      keyPair.privateKey, roomMembers, myUserId
     );
     return encryptFile(arrayBuffer, key);
   },
@@ -137,12 +130,20 @@ export const useChatStore = create((set, get) => ({
     const room = rooms.find(r => r.id === roomId);
     const roomMembers = members[roomId] || [];
     const key = await getKeyForRoom(
-      roomId,
-      room?.type || 'channel',
-      keyPair.privateKey,
-      roomMembers,
-      myUserId
+      roomId, room?.type || 'channel',
+      keyPair.privateKey, roomMembers, myUserId
     );
     return decryptFile(arrayBuffer, key);
+  },
+
+  // Helper used by MessageInput directly
+  getEncryptionKey: async (roomId, keyPair, myUserId) => {
+    const { members, rooms } = get();
+    const room = rooms.find(r => r.id === roomId);
+    const roomMembers = members[roomId] || [];
+    return getKeyForRoom(
+      roomId, room?.type || 'channel',
+      keyPair.privateKey, roomMembers, myUserId
+    );
   },
 }));

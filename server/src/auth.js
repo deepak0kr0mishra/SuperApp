@@ -2,7 +2,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
-import { userQueries, roomQueries } from './db.js';
+import { userQueries, roomQueries, generateUserCode } from './db.js';
 
 const router = express.Router();
 
@@ -40,12 +40,30 @@ router.post('/register', async (req, res) => {
     const id = uuidv4();
     const displayName = display_name?.trim() || username;
 
+    // Generate unique 6-char user code
+    let user_code = null;
+    for (let i = 0; i < 10; i++) {
+      const candidate = generateUserCode();
+      if (!userQueries.findByCode.get(candidate)) { user_code = candidate; break; }
+    }
+    if (!user_code) user_code = generateUserCode() + Date.now().toString(36).slice(-2).toUpperCase();
+
+    // First real user becomes admin
+    let role = 'user';
+    try {
+      const count = userQueries.count.get();
+      if (count.c === 0) role = 'admin';
+    } catch {}
+
     userQueries.create.run({
       id,
       username,
       display_name: displayName,
       password_hash,
       avatar_color: randomColor(),
+      user_code,
+      bio: '',
+      role,
     });
 
     // Auto-join all default channels
@@ -114,6 +132,40 @@ router.put('/public-key', authenticateToken, (req, res) => {
   if (!publicKey) return res.status(400).json({ error: 'Public key required' });
   userQueries.updatePublicKey.run(publicKey, req.user.userId);
   res.json({ success: true });
+});
+
+// PUT /api/auth/profile — update own display_name / bio
+router.put('/profile', authenticateToken, async (req, res) => {
+  try {
+    let { display_name, bio } = req.body;
+    if (display_name !== undefined) {
+      display_name = String(display_name).trim().slice(0, 40);
+      if (!display_name) return res.status(400).json({ error: 'Display name cannot be empty' });
+    }
+    if (bio !== undefined) {
+      bio = String(bio).slice(0, 200);
+    }
+    userQueries.updateProfile.run(
+      display_name === undefined ? null : display_name,
+      bio === undefined ? null : bio,
+      req.user.userId
+    );
+    // Ensure code exists for legacy users hitting this endpoint
+    let user = userQueries.findById.get(req.user.userId);
+    if (!user.user_code) {
+      let code = generateUserCode();
+      for (let i = 0; i < 10 && userQueries.findByCode.get(code); i++) code = generateUserCode();
+      try {
+        const db = (await import('./db.js')).default;
+        db.prepare('UPDATE users SET user_code = ? WHERE id = ?').run(code, req.user.userId);
+        user = userQueries.findById.get(req.user.userId);
+      } catch {}
+    }
+    res.json({ user });
+  } catch (err) {
+    console.error('Profile update error:', err);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
 });
 
 export function authenticateToken(req, res, next) {

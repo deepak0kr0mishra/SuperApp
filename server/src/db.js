@@ -23,6 +23,9 @@ db.exec(`
     public_key TEXT,
     avatar_color TEXT NOT NULL DEFAULT '#6366f1',
     status TEXT NOT NULL DEFAULT 'offline',
+    user_code TEXT UNIQUE,
+    bio TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'user',
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
@@ -88,6 +91,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id);
 `);
 
+// Lightweight migrations for existing DBs (SQLite can't ADD COLUMN with UNIQUE — use plain column + index)
+try { db.exec(`ALTER TABLE users ADD COLUMN user_code TEXT`); } catch {}
+try { db.exec(`ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''`); } catch {}
+try { db.exec(`ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'`); } catch {}
+try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_code ON users(user_code)`); } catch {}
+
 // Seed default channels if not exist
 const seedRooms = () => {
   const existing = db.prepare('SELECT COUNT(*) as count FROM rooms').get();
@@ -117,17 +126,63 @@ const seedRooms = () => {
 
 seedRooms();
 
+// Backfill missing user_code / role for existing users
+function generateUserCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+const backfillUsers = () => {
+  const withoutCode = db.prepare(`SELECT id FROM users WHERE user_code IS NULL`).all();
+  const insertCode = db.prepare(`UPDATE users SET user_code = ? WHERE id = ?`);
+  for (const u of withoutCode) {
+    // ensure uniqueness with retries
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        insertCode.run(generateUserCode(), u.id);
+        break;
+      } catch {}
+    }
+  }
+  // Ensure at least one admin exists (first real user becomes admin if none)
+  try {
+    const adminCount = db.prepare(`SELECT COUNT(*) as c FROM users WHERE role = 'admin'`).get();
+    if (adminCount.c === 0) {
+      const first = db.prepare(`SELECT id FROM users WHERE id != 'system' ORDER BY created_at ASC LIMIT 1`).get();
+      if (first) db.prepare(`UPDATE users SET role = 'admin' WHERE id = ?`).run(first.id);
+    }
+  } catch {}
+};
+
+backfillUsers();
+
 // --- Query Helpers ---
 export const userQueries = {
   create: db.prepare(`
-    INSERT INTO users (id, username, display_name, password_hash, avatar_color)
-    VALUES (@id, @username, @display_name, @password_hash, @avatar_color)
+    INSERT INTO users (id, username, display_name, password_hash, avatar_color, user_code, bio, role)
+    VALUES (@id, @username, @display_name, @password_hash, @avatar_color, @user_code, @bio, @role)
   `),
   findByUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
-  findById: db.prepare('SELECT id, username, display_name, public_key, avatar_color, status, created_at FROM users WHERE id = ?'),
-  findAll: db.prepare('SELECT id, username, display_name, public_key, avatar_color, status, created_at FROM users ORDER BY username'),
+  findByCode: db.prepare('SELECT * FROM users WHERE user_code = ?'),
+  findById: db.prepare('SELECT id, username, display_name, public_key, avatar_color, status, user_code, bio, role, created_at FROM users WHERE id = ?'),
+  findAll: db.prepare(`SELECT id, username, display_name, public_key, avatar_color, status, user_code, bio, role, created_at FROM users WHERE id != 'system' ORDER BY username`),
+  search: db.prepare(`
+    SELECT id, username, display_name, avatar_color, status, user_code, bio, role, created_at
+    FROM users
+    WHERE id != 'system' AND (username LIKE ? OR display_name LIKE ? OR user_code LIKE ?)
+    ORDER BY
+      CASE WHEN user_code = ? THEN 0 WHEN username = ? THEN 1 ELSE 2 END,
+      username
+    LIMIT 30
+  `),
   updatePublicKey: db.prepare('UPDATE users SET public_key = ? WHERE id = ?'),
   updateStatus: db.prepare('UPDATE users SET status = ? WHERE id = ?'),
+  updateProfile: db.prepare('UPDATE users SET display_name = COALESCE(?, display_name), bio = COALESCE(?, bio) WHERE id = ?'),
+  updateRole: db.prepare('UPDATE users SET role = ? WHERE id = ?'),
+  deleteById: db.prepare('DELETE FROM users WHERE id = ?'),
+  count: db.prepare(`SELECT COUNT(*) as c FROM users WHERE id != 'system'`),
 };
 
 export const roomQueries = {
@@ -142,7 +197,7 @@ export const roomQueries = {
     VALUES (@id, @name, @description, @type, @created_by)
   `),
   getMembers: db.prepare(`
-    SELECT u.id, u.username, u.display_name, u.avatar_color, u.status, u.public_key
+    SELECT u.id, u.username, u.display_name, u.avatar_color, u.status, u.public_key, u.user_code, u.bio, u.role
     FROM room_members rm JOIN users u ON rm.user_id = u.id
     WHERE rm.room_id = ?
   `),
@@ -156,6 +211,7 @@ export const roomQueries = {
     ORDER BY r.created_at ASC
   `),
   delete: db.prepare('DELETE FROM rooms WHERE id = ?'),
+  count: db.prepare('SELECT COUNT(*) as c FROM rooms'),
 };
 
 export const messageQueries = {
@@ -176,7 +232,16 @@ export const messageQueries = {
     WHERE m.room_id = ? AND m.created_at > ?
     ORDER BY m.created_at ASC
   `),
+  getRecentGlobal: db.prepare(`
+    SELECT m.*, u.username, u.display_name, r.name as room_name
+    FROM messages m JOIN users u ON m.sender_id = u.id
+    LEFT JOIN rooms r ON m.room_id = r.id
+    ORDER BY m.created_at DESC
+    LIMIT 50
+  `),
   delete: db.prepare('DELETE FROM messages WHERE id = ? AND sender_id = ?'),
+  adminDelete: db.prepare('DELETE FROM messages WHERE id = ?'),
+  findById: db.prepare('SELECT * FROM messages WHERE id = ?'),
   addReaction: db.prepare(`
     INSERT OR IGNORE INTO reactions (message_id, user_id, emoji) VALUES (?, ?, ?)
   `),
@@ -186,6 +251,7 @@ export const messageQueries = {
     FROM reactions WHERE message_id = ?
     GROUP BY emoji
   `),
+  count: db.prepare('SELECT COUNT(*) as c FROM messages'),
 };
 
 export const fileQueries = {
@@ -195,5 +261,7 @@ export const fileQueries = {
   `),
   findById: db.prepare('SELECT * FROM files WHERE id = ?'),
 };
+
+export { generateUserCode };
 
 export default db;

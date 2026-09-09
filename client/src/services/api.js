@@ -1,4 +1,4 @@
-const BASE_URL = '/api';
+const BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 function getHeaders(isFormData = false) {
   const token = localStorage.getItem('sc_token');
@@ -31,6 +31,23 @@ export const api = {
   me: () => request('GET', '/auth/me'),
   uploadPublicKey: (publicKey) =>
     request('PUT', '/auth/public-key', { publicKey: JSON.stringify(publicKey) }),
+  updateProfile: (display_name, bio) =>
+    request('PUT', '/auth/profile', { display_name, bio }),
+
+  // Users — profile system with unique code search
+  getAllUsers: () => request('GET', '/rooms/users/all'),
+  searchUsers: (q) => request('GET', `/users/search?q=${encodeURIComponent(q)}`),
+  getUser: (id) => request('GET', `/users/${id}`),
+
+  // Admin
+  adminStats: () => request('GET', '/admin/stats'),
+  adminGetUsers: () => request('GET', '/admin/users'),
+  adminSetRole: (id, role) => request('PUT', `/admin/users/${id}/role`, { role }),
+  adminDeleteUser: (id) => request('DELETE', `/admin/users/${id}`),
+  adminGetRooms: () => request('GET', '/admin/rooms'),
+  adminDeleteRoom: (id) => request('DELETE', `/admin/rooms/${id}`),
+  adminRecentMessages: () => request('GET', '/admin/messages/recent'),
+  adminDeleteMessage: (id) => request('DELETE', `/admin/messages/${id}`),
 
   // Rooms
   getRooms: () => request('GET', '/rooms'),
@@ -40,7 +57,6 @@ export const api = {
   joinRoom: (roomId) => request('POST', `/rooms/${roomId}/join`),
   leaveRoom: (roomId) => request('DELETE', `/rooms/${roomId}/leave`),
   createDM: (targetUserId) => request('POST', '/rooms/dm', { targetUserId }),
-  getAllUsers: () => request('GET', '/rooms/users/all'),
 
   // Files
   uploadFile: async (file, roomId, onProgress) => {

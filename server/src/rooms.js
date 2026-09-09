@@ -11,46 +11,8 @@ router.get('/', authenticateToken, (req, res) => {
   res.json({ rooms: allRooms });
 });
 
-// GET /api/rooms/:id/members
-router.get('/:id/members', authenticateToken, (req, res) => {
-  const members = roomQueries.getMembers.all(req.params.id);
-  res.json({ members });
-});
-
-// POST /api/rooms — create new room
-router.post('/', authenticateToken, (req, res) => {
-  const { name, description, type } = req.body;
-  if (!name) return res.status(400).json({ error: 'Room name required' });
-
-  const id = uuidv4();
-  roomQueries.create.run({
-    id,
-    name: name.toLowerCase().replace(/\s+/g, '-'),
-    description: description || '',
-    type: type || 'channel',
-    created_by: req.user.userId,
-  });
-  roomQueries.addMember.run(id, req.user.userId);
-
-  const room = roomQueries.findById.get(id);
-  res.status(201).json({ room });
-});
-
-// POST /api/rooms/:id/join
-router.post('/:id/join', authenticateToken, (req, res) => {
-  const room = roomQueries.findById.get(req.params.id);
-  if (!room) return res.status(404).json({ error: 'Room not found' });
-  roomQueries.addMember.run(req.params.id, req.user.userId);
-  res.json({ success: true });
-});
-
-// DELETE /api/rooms/:id/leave
-router.delete('/:id/leave', authenticateToken, (req, res) => {
-  roomQueries.removeMember.run(req.params.id, req.user.userId);
-  res.json({ success: true });
-});
-
-// GET /api/users — list all users
+// NOTE: specific routes must come before param routes
+// GET /api/rooms/users/all — list all users (legacy path, kept for compat)
 router.get('/users/all', authenticateToken, (req, res) => {
   const users = userQueries.findAll.all();
   res.json({ users });
@@ -93,6 +55,45 @@ router.post('/dm', authenticateToken, (req, res) => {
 
   const room = roomQueries.findById.get(id);
   res.status(201).json({ room });
+});
+
+// GET /api/rooms/:id/members
+router.get('/:id/members', authenticateToken, (req, res) => {
+  const members = roomQueries.getMembers.all(req.params.id);
+  res.json({ members });
+});
+
+// POST /api/rooms — create new room
+router.post('/', authenticateToken, (req, res) => {
+  const { name, description, type } = req.body;
+  if (!name) return res.status(400).json({ error: 'Room name required' });
+
+  const id = uuidv4();
+  roomQueries.create.run({
+    id,
+    name: name.toLowerCase().replace(/\s+/g, '-'),
+    description: description || '',
+    type: type || 'channel',
+    created_by: req.user.userId,
+  });
+  roomQueries.addMember.run(id, req.user.userId);
+
+  const room = roomQueries.findById.get(id);
+  res.status(201).json({ room });
+});
+
+// POST /api/rooms/:id/join
+router.post('/:id/join', authenticateToken, (req, res) => {
+  const room = roomQueries.findById.get(req.params.id);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  roomQueries.addMember.run(req.params.id, req.user.userId);
+  res.json({ success: true });
+});
+
+// DELETE /api/rooms/:id/leave
+router.delete('/:id/leave', authenticateToken, (req, res) => {
+  roomQueries.removeMember.run(req.params.id, req.user.userId);
+  res.json({ success: true });
 });
 
 export default router;

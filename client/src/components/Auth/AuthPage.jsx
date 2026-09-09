@@ -39,10 +39,10 @@ export default function AuthPage() {
 
       <div className="auth-card">
         <div className="auth-logo">
-          <div className="auth-logo-icon">🔐</div>
-          <div className="auth-logo-text">SecureChat</div>
+          <div className="auth-logo-icon">🌌</div>
+          <div className="auth-logo-text">Nebula</div>
         </div>
-        <p className="auth-tagline">End-to-end encrypted messaging & voice</p>
+        <p className="auth-tagline">Ride the cosmic wave — encrypted spaces, voice orbits & instant codes ✦</p>
 
         <div className="auth-tabs">
           <button

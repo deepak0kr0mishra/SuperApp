@@ -7,6 +7,8 @@ import { v4 as uuidv4 } from 'uuid';
 import authRouter from './auth.js';
 import roomsRouter from './rooms.js';
 import filesRouter from './files.js';
+import usersRouter from './users.js';
+import adminRouter from './admin.js';
 import { messageQueries, roomQueries, userQueries } from './db.js';
 import { setupVoiceSignaling, getVoiceChannelState } from './voice.js';
 
@@ -34,6 +36,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use('/api/auth', authRouter);
 app.use('/api/rooms', roomsRouter);
 app.use('/api/files', filesRouter);
+app.use('/api/users', usersRouter);
+app.use('/api/admin', adminRouter);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: Date.now() }));
 
@@ -69,10 +73,24 @@ io.on('connection', (socket) => {
 
   // --- Join a text room ---
   socket.on('room:join', ({ roomId }) => {
-    socket.join(`room:${roomId}`);
-    // Send last 100 messages
-    const messages = messageQueries.getByRoom.all(roomId);
-    socket.emit('messages:history', { roomId, messages });
+    try {
+      if (!roomId) return;
+      const room = roomQueries.findById.get(roomId);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+      // Auto-join public channels so default channels always work
+      if (room.type === 'channel') {
+        try { roomQueries.addMember.run(roomId, socket.userId); } catch {}
+      }
+      socket.join(`room:${roomId}`);
+      // Send last 100 messages
+      const messages = messageQueries.getByRoom.all(roomId);
+      socket.emit('messages:history', { roomId, messages });
+    } catch (err) {
+      console.error('room:join error:', err);
+    }
   });
 
   socket.on('room:leave', ({ roomId }) => {
@@ -122,10 +140,19 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Delete message ---
+  // --- Delete message (owner or admin) ---
   socket.on('message:delete', ({ messageId, roomId }) => {
-    messageQueries.delete.run(messageId, socket.userId);
-    io.to(`room:${roomId}`).emit('message:deleted', { messageId, roomId });
+    try {
+      const me = userQueries.findById.get(socket.userId);
+      if (me?.role === 'admin') {
+        messageQueries.adminDelete.run(messageId);
+      } else {
+        messageQueries.delete.run(messageId, socket.userId);
+      }
+      io.to(`room:${roomId}`).emit('message:deleted', { messageId, roomId });
+    } catch (err) {
+      console.error('Delete error:', err);
+    }
   });
 
   // --- Reactions ---

@@ -20,13 +20,13 @@ export default function ChatPanel() {
   if (!activeRoomId || !activeRoom) {
     return (
       <div className="chat-area" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: 64, marginBottom: 16 }}>🔐</div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>
-            Welcome to SecureChat
+        <div style={{ textAlign: 'center', color: 'var(--text-muted)', maxWidth: 360 }}>
+          <div style={{ fontSize: 64, marginBottom: 16 }}>🌌</div>
+          <div style={{ fontSize: 22, fontWeight: 800, background: 'var(--cosmic-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', marginBottom: 8 }}>
+            Welcome to Nebula
           </div>
-          <div style={{ fontSize: 14, maxWidth: 300 }}>
-            Select a channel or start a direct message to begin end-to-end encrypted chatting
+          <div style={{ fontSize: 14 }}>
+            Drift into a <b>✨ Space</b> like general, media or random — or ping anyone via name / <b>#code</b> for an encrypted DM. Hit <b>🎙️</b> to send voice notes.
           </div>
         </div>
       </div>
@@ -34,8 +34,10 @@ export default function ChatPanel() {
   }
 
   const isDM = activeRoom.type === 'dm';
-  const roomIcon = isDM ? '💬' : '#';
+  const roomIcons = { general: '🌌', media: '🎨', audio: '🎧', random: '⚡' };
+  const roomIcon = isDM ? '💫' : (roomIcons[(activeRoom.name || '').toLowerCase()] || '✦');
   const roomMemberCount = (members[activeRoomId] || []).length;
+  const voiceCount = (useVoiceStore.getState().voiceChannelMembers[currentChannelId] || []).length;
 
   return (
     <div className="chat-area">
@@ -49,7 +51,7 @@ export default function ChatPanel() {
           )}
         </div>
 
-        {/* Voice indicator in chat area */}
+        {/* Voice indicator in chat area — now shows live count */}
         {currentChannelId && (
           <div style={{
             display: 'flex',
@@ -57,14 +59,14 @@ export default function ChatPanel() {
             gap: 8,
             background: 'rgba(34,211,162,0.08)',
             border: '1px solid rgba(34,211,162,0.2)',
-            borderRadius: 8,
+            borderRadius: 999,
             padding: '4px 12px',
             fontSize: 12,
             color: 'var(--success)',
-            fontWeight: 600,
+            fontWeight: 700,
           }}>
-            <span>🔊</span>
-            <span>Voice Connected</span>
+            <span className="voice-member-dot" style={{ background: 'var(--success)', width: 8, height: 8, borderRadius: '50%' }} />
+            <span>🛰️ Orbit live{voiceCount ? ` • ${voiceCount}` : ''}</span>
             <button
               id="topbar-mute-btn"
               onClick={toggleMute}
@@ -86,10 +88,10 @@ export default function ChatPanel() {
 
         <div className="topbar-actions">
           <div className="e2e-badge">
-            🔒 E2E Encrypted
+            ✦ E2E Encrypted
           </div>
           <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>
-            {roomMemberCount > 0 ? `${roomMemberCount} members` : ''}
+            {roomMemberCount > 0 ? `✦ ${roomMemberCount} crew` : ''}
           </span>
         </div>
       </div>
