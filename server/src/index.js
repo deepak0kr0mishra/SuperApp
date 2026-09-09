@@ -14,14 +14,29 @@ import { setupVoiceSignaling, getVoiceChannelState } from './voice.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'securechat_secret_key_change_in_prod';
 const PORT = process.env.PORT || 3001;
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+// Allow comma-separated list so Pages URL + localhost both work:
+// e.g. CLIENT_URL=https://deepak0kr0mishra.github.io,http://localhost:5173
+const CLIENT_URLS = (process.env.CLIENT_URL || 'http://localhost:5173')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const corsOrigin = (origin, cb) => {
+  if (!origin) return cb(null, true); // curl / health checks
+  if (CLIENT_URLS.includes(origin)) return cb(null, true);
+  // Allow any github.io subdomain of the owner for preview URLs
+  try {
+    const u = new URL(origin);
+    if (u.hostname.endsWith('.github.io')) return cb(null, true);
+  } catch {}
+  return cb(new Error('CORS blocked'));
+};
 
 const app = express();
 const httpServer = createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: CLIENT_URL,
+    origin: corsOrigin,
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -29,7 +44,7 @@ const io = new Server(httpServer, {
 });
 
 // --- Middleware ---
-app.use(cors({ origin: CLIENT_URL, credentials: true }));
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 
 // --- REST Routes ---
