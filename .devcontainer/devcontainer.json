@@ -1,0 +1,14 @@
+{
+  "name": "Nebula live backend",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-20-bookworm",
+  "forwardPorts": [3001],
+  "portsAttributes": {
+    "3001": {
+      "label": "Nebula API + voice signaling",
+      "visibility": "public"
+    }
+  },
+  "onCreateCommand": "npm run install:all",
+  "postStartCommand": "nohup npm start > /tmp/nebula-server.log 2>&1 & sleep 3; (curl -s http://localhost:3001/api/health || tail -n 20 /tmp/nebula-server.log)",
+  "remoteUser": "node"
+}

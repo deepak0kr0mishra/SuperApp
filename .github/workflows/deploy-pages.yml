@@ -31,19 +31,19 @@ jobs:
       - name: Install client dependencies
         run: npm ci --prefix client
 
-      - name: Check backend URL configured
+      - name: Note backend URL source
         run: |
           if [ -z "${{ vars.VITE_SERVER_URL }}" ]; then
-            echo "::error::VITE_SERVER_URL repo variable is NOT set. Go to Settings → Secrets and variables → Actions → Variables and add VITE_SERVER_URL=https://your-backend.onrender.com (no trailing slash)."
-            exit 1
+            echo "::warning::VITE_SERVER_URL repo variable not set — build will use the URL baked into client/src/config.js."
+          else
+            echo "Using VITE_SERVER_URL repo variable (overrides client/src/config.js)."
           fi
-          echo "Backend: ${{ vars.VITE_SERVER_URL }}"
 
       - name: Build client
         run: npm run build --prefix client
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
-          VITE_API_URL: ${{ vars.VITE_SERVER_URL }}/api
+          VITE_API_URL: ${{ vars.VITE_SERVER_URL != '' && format('{0}/api', vars.VITE_SERVER_URL) || '' }}
           VITE_SERVER_URL: ${{ vars.VITE_SERVER_URL }}
 
       - name: Upload Pages artifact

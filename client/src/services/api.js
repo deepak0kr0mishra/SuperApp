@@ -1,4 +1,6 @@
-const BASE_URL = import.meta.env.VITE_API_URL || '/api';
+import { API_URL, LIVE_BACKEND_CONFIGURED } from '../config.js';
+
+const BASE_URL = API_URL;
 
 function getHeaders(isFormData = false) {
   const token = localStorage.getItem('sc_token');
@@ -30,8 +32,7 @@ async function request(method, path, body = null, isFormData = false) {
     if (preview.includes('<html') || preview.includes('<!DOCTYPE')) {
       throw new Error(
         'Backend not reachable (got HTML instead of JSON). ' +
-        'The Pages build is calling /api on GitHub itself. ' +
-        'Set the VITE_SERVER_URL repo variable to your Render backend URL and redeploy.'
+        'The live backend URL is missing or wrong — check the URL in client/src/config.js, then redeploy.'
       );
     }
     throw new Error(`Server returned non-JSON response (status ${res.status}). Is the backend running?`);
@@ -41,16 +42,12 @@ async function request(method, path, body = null, isFormData = false) {
   return data;
 }
 
-// Warn in console when running on Pages without a backend configured,
+// Warn in console when running on the live site without a backend configured,
 // so the cause is obvious in DevTools.
-if (
-  typeof window !== 'undefined' &&
-  window.location.hostname.endsWith('.github.io') &&
-  (!import.meta.env.VITE_SERVER_URL || !import.meta.env.VITE_API_URL)
-) {
+if (typeof window !== 'undefined' && !LIVE_BACKEND_CONFIGURED) {
   console.warn(
-    '[Nebula] VITE_SERVER_URL / VITE_API_URL missing at build time. ' +
-    'Set the VITE_SERVER_URL repository variable and redeploy the Pages workflow.'
+    '[Nebula] Live backend URL not configured. ' +
+    'Paste your backend URL into client/src/config.js and redeploy.'
   );
 }
 

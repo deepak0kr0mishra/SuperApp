@@ -1,6 +1,7 @@
 import { io } from 'socket.io-client';
+import { BACKEND_URL } from '../config.js';
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || window.location.origin;
+const SERVER_URL = BACKEND_URL;
 
 let socket = null;
 
