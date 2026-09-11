@@ -228,8 +228,8 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
         </div>
         <div className="sidebar-user-info" onClick={onOpenProfile} style={{ cursor: 'pointer' }} title="Open profile">
           <div className="sidebar-user-name">{user?.display_name || user?.username}</div>
-          <div className="sidebar-user-status">
-            Online {user?.uid ? <span className="code-chip small">UID {user.uid}</span> : user?.user_code ? <span className="code-chip small">#{user.user_code}</span> : null} {isAdmin ? <span className="admin-chip">ADMIN</span> : null}
+          <div className="sidebar-user-status" title={user?.uid ? `UID ${user.uid}` : undefined}>
+            Online {isAdmin ? <span className="admin-chip">ADMIN</span> : null}
           </div>
         </div>
         <div className="sidebar-user-actions">
