@@ -261,7 +261,24 @@ const backfillUsers = () => {
 
 backfillUsers();
 
-// --- Fixed admin accounts: Admin_01..Admin_05, password "***REMOVED***" ---
+// --- Fixed admin accounts: Admin_01..Admin_05 ---
+// The seed password comes from the ADMIN_PASSWORD env var (set it in the
+// Render dashboard — never commit passwords to git). Local dev falls back
+// to a documented default; production with no env var gets a one-time
+// random password printed to the server logs (visible only to the owner).
+import { randomBytes } from 'crypto';
+
+function getSeedAdminPassword() {
+  if (process.env.ADMIN_PASSWORD) return { password: process.env.ADMIN_PASSWORD, generated: false };
+  if (process.env.NODE_ENV === 'production') {
+    const password = 'Admin-' + randomBytes(9).toString('base64url');
+    console.warn('  [seed] WARNING: ADMIN_PASSWORD is not set — generated a one-time');
+    console.warn(`  [seed] fixed-admin password: ${password}`);
+    console.warn('  [seed] Set ADMIN_PASSWORD in the dashboard and redeploy for a stable login.');
+    return { password, generated: true };
+  }
+  return { password: '***REMOVED***', generated: false };
+}
 // Total admin capacity is 10: the 5 fixed admins (always admin, protected)
 // plus up to 5 promotable slots for regular users. Seeded on every boot
 // (missing fixed ones are created, existing fixed ones are re-affirmed as
@@ -275,7 +292,8 @@ export const isFixedAdmin = (user) =>
 
 const seedFixedAdmins = () => {
   try {
-    const hash = bcrypt.hashSync('***REMOVED***', 12);
+    const { password: seedPassword } = getSeedAdminPassword();
+    const hash = bcrypt.hashSync(seedPassword, 12);
     for (let i = 0; i < 5; i++) {
       const username = FIXED_ADMIN_USERNAMES[i];
       const id = FIXED_ADMIN_IDS[i];
