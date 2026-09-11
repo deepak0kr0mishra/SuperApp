@@ -33,7 +33,7 @@ export default function MembersPanel() {
 
   return (
     <aside className="members-panel">
-      <div className="members-header">✦ Crew — {roomMembers.length}</div>
+      <div className="members-header">✦ Members — {roomMembers.length}</div>
 
       <div className="members-list">
         {online.length > 0 && (
@@ -75,13 +75,13 @@ export default function MembersPanel() {
           </div>
         )}
         {roomMembers.length === 0 && (
-          <div className="sidebar-empty">No crew manifest yet</div>
+          <div className="sidebar-empty">No members yet</div>
         )}
       </div>
 
       {/* Voice panel at bottom — FIXED to show who joined */}
       <div className="voice-panel">
-        <div className="voice-panel-title">🔊 Voice Orbit — live</div>
+        <div className="voice-panel-title">🔊 Voice — live</div>
 
         {VOICE_CHANNELS.map(vc => {
           const vcMembers = voiceChannelMembers[vc.id] || [];
@@ -118,7 +118,7 @@ export default function MembersPanel() {
                   })}
                 </div>
               ) : (
-                <div className="voice-panel-empty">Empty orbit — hop in ✦</div>
+                <div className="voice-panel-empty">Empty room — hop in ✦</div>
               )}
             </div>
           );

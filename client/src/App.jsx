@@ -19,11 +19,11 @@ function LoadingScreen() {
         boxShadow: '0 0 30px rgba(139,92,246,0.5)',
         marginBottom: 8,
       }}>
-        🌌
+        🍵
       </div>
       <div className="spinner" />
       <div style={{ fontSize: 14, color: 'var(--text-muted)', marginTop: 8 }}>
-        Aligning to Nebula orbit…
+        Brewing your chai…
       </div>
     </div>
   );

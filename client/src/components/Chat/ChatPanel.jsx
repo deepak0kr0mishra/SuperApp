@@ -25,8 +25,8 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
           <span className="topbar-name">Welcome</span>
         </div>
         <div className="empty-chat">
-          <div className="empty-chat-icon">🌌</div>
-          <div className="empty-chat-title">Welcome to Nebula</div>
+          <div className="empty-chat-icon">🍵</div>
+          <div className="empty-chat-title">Welcome to TeaChat</div>
           <div className="empty-chat-sub">
             Pick a <b>chat</b> or a <b>space</b> from the left — or tap 🔍 to find someone and start a DM.
           </div>
@@ -41,7 +41,7 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
   const peer = isDM ? roomMembers.find(m => m.id !== user?.id) : null;
   const peerStatus = peer ? (useChatStore.getState().userStatuses[peer.id] || peer.status || 'offline') : null;
 
-  const roomIcons = { general: '🌌', media: '🎨', audio: '🎧', random: '⚡' };
+  const roomIcons = { general: '🍵', media: '🎨', audio: '🎧', random: '⚡' };
   const roomIcon = isDM ? null : (roomIcons[(activeRoom.name || '').toLowerCase()] || '✦');
   const roomMemberCount = roomMembers.length;
   const voiceCount = (useVoiceStore.getState().voiceChannelMembers[currentChannelId] || []).length;
@@ -75,7 +75,7 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
         {currentChannelId && (
           <div className="voice-live-pill">
             <span className="voice-member-dot" />
-            <span>🛰️ Orbit live{voiceCount ? ` • ${voiceCount}` : ''}</span>
+            <span>🔊 Voice live{voiceCount ? ` • ${voiceCount}` : ''}</span>
             <button id="topbar-mute-btn" className="pill-btn" onClick={toggleMute} title={isMuted ? 'Unmute' : 'Mute'}>
               {isMuted ? '🔇' : '🎙️'}
             </button>
@@ -85,7 +85,7 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
 
         <div className="topbar-actions">
           {!isDM && roomMemberCount > 0 && (
-            <span className="member-count">✦ {roomMemberCount} crew</span>
+            <span className="member-count">✦ {roomMemberCount} members</span>
           )}
           {isDM && peer && (
             <button className="icon-btn" onClick={() => onOpenProfile?.(peer.id)} title="View profile">👤</button>

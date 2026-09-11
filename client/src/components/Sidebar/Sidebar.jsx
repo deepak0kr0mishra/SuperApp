@@ -11,7 +11,7 @@ export const VOICE_CHANNELS = [
 ];
 
 const CHANNEL_ICONS = {
-  general: '🌌',
+  general: '🍵',
   media: '🎨',
   audio: '🎧',
   random: '⚡',
@@ -100,10 +100,10 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
     <aside className="sidebar">
       <div className="sidebar-header">
         <div className="sidebar-logo">
-          <div className="sidebar-logo-icon">🌌</div>
+          <div className="sidebar-logo-icon">🍵</div>
           <div>
-            <div className="sidebar-logo-text">Nebula</div>
-            <div className="sidebar-logo-sub">cosmic chat</div>
+            <div className="sidebar-logo-text">TeaChat</div>
+            <div className="sidebar-logo-sub">warm chats</div>
           </div>
         </div>
         <button id="sidebar-search-btn" className="icon-btn" onClick={onOpenSearch} title="Find people">🔍</button>

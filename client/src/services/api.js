@@ -46,7 +46,7 @@ async function request(method, path, body = null, isFormData = false) {
 // so the cause is obvious in DevTools.
 if (typeof window !== 'undefined' && !LIVE_BACKEND_CONFIGURED) {
   console.warn(
-    '[Nebula] Live backend URL not configured. ' +
+    '[TeaChat] Live backend URL not configured. ' +
     'Paste your backend URL into client/src/config.js and redeploy.'
   );
 }
