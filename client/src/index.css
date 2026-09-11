@@ -329,8 +329,8 @@ a:hover { text-decoration: underline; }
 .sidebar-user-status { font-size: 11px; color: var(--success); display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; white-space: nowrap; }
 .sidebar-user-status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--success); display: inline-block; flex-shrink: 0; }
 .sidebar-user-status .code-chip, .sidebar-user-status .admin-chip { flex-shrink: 0; }
-/* Action buttons (admin / theme / mute / logout) — compact, never overlap name */
-.sidebar-user-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+/* Action buttons row above the user footer (admin / theme / mute / logout) */
+.sidebar-user-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 6px 10px 0; flex-shrink: 0; }
 .sidebar-user-actions .icon-btn { width: 28px; height: 28px; font-size: 14px; }
 
 .icon-btn {

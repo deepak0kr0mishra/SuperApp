@@ -222,6 +222,20 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
         )}
       </div>
 
+      <div className="sidebar-user-actions">
+        {isAdmin && (
+          <button id="sidebar-admin-btn" className="icon-btn" onClick={onOpenAdmin} title="Admin dashboard">🛡️</button>
+        )}
+        {currentChannelId && (
+          <button id="sidebar-mute-btn" className={`icon-btn ${isMuted ? 'danger' : ''}`} onClick={(e) => { e.stopPropagation(); toggleMute(); }} title={isMuted ? 'Unmute' : 'Mute'}>
+            {isMuted ? '🔇' : '🎙️'}
+          </button>
+        )}
+        <button id="sidebar-theme-btn" className="icon-btn" onClick={toggleTheme} title={theme === 'light' ? 'Dark mode' : 'Light mode'}>
+          {theme === 'light' ? '🌙' : '☀️'}
+        </button>
+        <button id="sidebar-logout-btn" className="icon-btn danger" onClick={logout} title="Log out">⏻</button>
+      </div>
       <div className="sidebar-user">
         <div style={{ cursor: 'pointer', display: 'flex' }} onClick={onOpenProfile} title="My profile">
           <Avatar name={user?.display_name || user?.username || '?'} color={user?.avatar_color || '#6366f1'} size="md" status="online" />
@@ -231,20 +245,6 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
           <div className="sidebar-user-status" title={user?.uid ? `UID ${user.uid}` : undefined}>
             Online {isAdmin ? <span className="admin-chip">ADMIN</span> : null}
           </div>
-        </div>
-        <div className="sidebar-user-actions">
-          {isAdmin && (
-            <button id="sidebar-admin-btn" className="icon-btn" onClick={onOpenAdmin} title="Admin dashboard">🛡️</button>
-          )}
-          {currentChannelId && (
-            <button id="sidebar-mute-btn" className={`icon-btn ${isMuted ? 'danger' : ''}`} onClick={(e) => { e.stopPropagation(); toggleMute(); }} title={isMuted ? 'Unmute' : 'Mute'}>
-              {isMuted ? '🔇' : '🎙️'}
-            </button>
-          )}
-          <button id="sidebar-theme-btn" className="icon-btn" onClick={toggleTheme} title={theme === 'light' ? 'Dark mode' : 'Light mode'}>
-            {theme === 'light' ? '🌙' : '☀️'}
-          </button>
-          <button id="sidebar-logout-btn" className="icon-btn danger" onClick={logout} title="Log out">⏻</button>
         </div>
       </div>
     </aside>
