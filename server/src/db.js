@@ -4,7 +4,9 @@ import { dirname, join } from 'path';
 import { mkdirSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, '../../data');
+// DATA_DIR can be overridden on Render via env var pointing at the mounted disk.
+// Locally defaults to <repo-root>/data (i.e. server/src/../../data).
+export const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data');
 mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new Database(join(DATA_DIR, 'securechat.db'));

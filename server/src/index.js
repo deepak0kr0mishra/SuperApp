@@ -219,12 +219,12 @@ io.on('connection', (socket) => {
 // Set up WebRTC voice signaling
 setupVoiceSignaling(io, connectedUsers);
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`
   ╔═══════════════════════════════╗
   ║   SecureChat Server v1.0.0    ║
   ║   Running on port ${PORT}         ║
-  ║   Client: ${CLIENT_URL}  ║
+  ║   Client(s): ${CLIENT_URLS.join(', ')}  ║
   ╚═══════════════════════════════╝
   `);
 });

@@ -2,18 +2,19 @@ services:
   - type: web
     name: superapp-server
     runtime: node
+    plan: free
+    numInstances: 1 # required: socket.io + SQLite can't run on multiple instances
     rootDir: server
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_VERSION
+        value: 20.12.2
       - key: JWT_SECRET
         generateValue: true
       - key: CLIENT_URL
-        sync: false
-    disk:
-      name: superapp-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
+        sync: false # set in dashboard to https://deepak0kr0mishra.github.io (comma-separated list allowed)

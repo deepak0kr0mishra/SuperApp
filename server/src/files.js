@@ -1,15 +1,13 @@
 import express from 'express';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
-import { fileURLToPath } from 'url';
-import { dirname, join, extname } from 'path';
+import { join, extname } from 'path';
 import { mkdirSync, createReadStream } from 'fs';
 import { stat } from 'fs/promises';
-import { fileQueries, roomQueries } from './db.js';
+import { fileQueries, roomQueries, DATA_DIR } from './db.js';
 import { authenticateToken } from './auth.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const UPLOADS_DIR = join(__dirname, '../../data/uploads');
+const UPLOADS_DIR = join(DATA_DIR, 'uploads');
 mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const router = express.Router();

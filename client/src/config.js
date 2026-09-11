@@ -1,7 +1,10 @@
 // ─── THE ONLY URL YOU EVER SET (once) ─────────────────────────────
-// Your public backend URL (the forwarded port-3001 URL of your cloud
-// backend, e.g. https://<name>-3001.app.github.dev). Paste it once,
-// commit, push — every Pages deploy after that just works.
+// Your public backend URL on Render, e.g. https://superapp-server.onrender.com.
+// Preferred way: set it as a GitHub repo variable (no commit needed):
+//   Settings → Secrets and variables → Actions → Variables → New:
+//   VITE_SERVER_URL = https://superapp-server.onrender.com
+// Then re-run the "Deploy client to GitHub Pages" workflow.
+// Fallback: paste it into LIVE_BACKEND_URL below and push.
 //
 // Local development ignores this and uses localhost like before.
 const LIVE_BACKEND_URL = 'https://PASTE-YOUR-BACKEND-URL-HERE';
