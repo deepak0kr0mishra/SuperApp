@@ -5,7 +5,7 @@ import { useVoiceStore } from '../../stores/voiceStore.js';
 import MessageList from './MessageList.jsx';
 import MessageInput from './MessageInput.jsx';
 
-export default function ChatPanel() {
+export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar }) {
   const { activeRoomId, rooms, members, typingUsers } = useChatStore();
   const { user } = useAuthStore();
   const { currentChannelId, isMuted, toggleMute, leaveVoiceChannel, speakingUsers } = useVoiceStore();
@@ -19,108 +19,96 @@ export default function ChatPanel() {
 
   if (!activeRoomId || !activeRoom) {
     return (
-      <div className="chat-area" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center', color: 'var(--text-muted)', maxWidth: 360 }}>
-          <div style={{ fontSize: 64, marginBottom: 16 }}>🌌</div>
-          <div style={{ fontSize: 22, fontWeight: 800, background: 'var(--cosmic-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', marginBottom: 8 }}>
-            Welcome to Nebula
+      <div className="chat-area">
+        <div className="topbar">
+          <button className="icon-btn hamburger" onClick={onToggleSidebar} title="Chats">☰</button>
+          <span className="topbar-name">Welcome</span>
+        </div>
+        <div className="empty-chat">
+          <div className="empty-chat-icon">🌌</div>
+          <div className="empty-chat-title">Welcome to Nebula</div>
+          <div className="empty-chat-sub">
+            Pick a <b>chat</b> or a <b>space</b> from the left — or tap 🔍 to find someone and start a DM.
           </div>
-          <div style={{ fontSize: 14 }}>
-            Drift into a <b>✨ Space</b> like general, media or random — or ping anyone via name / <b>#code</b> for an encrypted DM. Hit <b>🎙️</b> to send voice notes.
-          </div>
+          <button className="btn-primary empty-chat-btn" onClick={onOpenSearch}>🔍 Find someone to chat</button>
         </div>
       </div>
     );
   }
 
   const isDM = activeRoom.type === 'dm';
+  const roomMembers = members[activeRoomId] || [];
+  const peer = isDM ? roomMembers.find(m => m.id !== user?.id) : null;
+  const peerStatus = peer ? (useChatStore.getState().userStatuses[peer.id] || peer.status || 'offline') : null;
+
   const roomIcons = { general: '🌌', media: '🎨', audio: '🎧', random: '⚡' };
-  const roomIcon = isDM ? '💫' : (roomIcons[(activeRoom.name || '').toLowerCase()] || '✦');
-  const roomMemberCount = (members[activeRoomId] || []).length;
+  const roomIcon = isDM ? null : (roomIcons[(activeRoom.name || '').toLowerCase()] || '✦');
+  const roomMemberCount = roomMembers.length;
   const voiceCount = (useVoiceStore.getState().voiceChannelMembers[currentChannelId] || []).length;
 
   return (
     <div className="chat-area">
       {/* Topbar */}
       <div className="topbar">
-        <span style={{ fontSize: 18 }}>{roomIcon}</span>
-        <div className="topbar-name">
-          {activeRoom.name}
-          {activeRoom.description && (
-            <span className="topbar-desc">{activeRoom.description}</span>
-          )}
-        </div>
+        <button className="icon-btn hamburger" onClick={onToggleSidebar} title="Back to chats">☰</button>
+        {isDM && peer ? (
+          <button className="dm-header" onClick={() => onOpenProfile?.(peer.id)} title="View profile">
+            <span className="avatar avatar-sm" style={{ background: peer.avatar_color || '#6366f1' }}>
+              {(peer.display_name || peer.username || '?')[0].toUpperCase()}
+              <span className={`status-dot ${peerStatus}`} />
+            </span>
+            <span className="topbar-name-col">
+              <span className="topbar-name">{peer.display_name || peer.username}</span>
+              <span className={`topbar-sub ${peerStatus}`}>{peerStatus === 'online' ? 'Online' : 'Offline'}</span>
+            </span>
+          </button>
+        ) : (
+          <>
+            <span style={{ fontSize: 18 }}>{roomIcon}</span>
+            <div className="topbar-name">
+              {activeRoom.name}
+              {activeRoom.description && <span className="topbar-desc">{activeRoom.description}</span>}
+            </div>
+          </>
+        )}
 
-        {/* Voice indicator in chat area — now shows live count */}
         {currentChannelId && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            background: 'rgba(34,211,162,0.08)',
-            border: '1px solid rgba(34,211,162,0.2)',
-            borderRadius: 999,
-            padding: '4px 12px',
-            fontSize: 12,
-            color: 'var(--success)',
-            fontWeight: 700,
-          }}>
-            <span className="voice-member-dot" style={{ background: 'var(--success)', width: 8, height: 8, borderRadius: '50%' }} />
+          <div className="voice-live-pill">
+            <span className="voice-member-dot" />
             <span>🛰️ Orbit live{voiceCount ? ` • ${voiceCount}` : ''}</span>
-            <button
-              id="topbar-mute-btn"
-              onClick={toggleMute}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: isMuted ? 'var(--danger)' : 'var(--success)' }}
-              title={isMuted ? 'Unmute' : 'Mute'}
-            >
+            <button id="topbar-mute-btn" className="pill-btn" onClick={toggleMute} title={isMuted ? 'Unmute' : 'Mute'}>
               {isMuted ? '🔇' : '🎙️'}
             </button>
-            <button
-              id="topbar-leave-voice-btn"
-              onClick={leaveVoiceChannel}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--danger)' }}
-              title="Leave voice"
-            >
-              ✕
-            </button>
+            <button id="topbar-leave-voice-btn" className="pill-btn danger" onClick={leaveVoiceChannel} title="Leave voice">✕</button>
           </div>
         )}
 
         <div className="topbar-actions">
-          <div className="e2e-badge">
-            ✦ E2E Encrypted
-          </div>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>
-            {roomMemberCount > 0 ? `✦ ${roomMemberCount} crew` : ''}
-          </span>
+          {!isDM && roomMemberCount > 0 && (
+            <span className="member-count">✦ {roomMemberCount} crew</span>
+          )}
+          {isDM && peer && (
+            <button className="icon-btn" onClick={() => onOpenProfile?.(peer.id)} title="View profile">👤</button>
+          )}
         </div>
       </div>
 
       {/* Messages */}
-      <MessageList
-        roomId={activeRoomId}
-        onReply={setReplyTo}
-      />
+      <MessageList roomId={activeRoomId} onReply={setReplyTo} onOpenProfile={onOpenProfile} />
 
       {/* Typing */}
-      <div className="typing-indicator" style={{ padding: '0 16px' }}>
+      <div className="typing-indicator">
         {typingList.length > 0 && (
           <>
             <strong>{typingList.join(', ')}</strong>
             {typingList.length === 1 ? ' is' : ' are'} typing
-            <span className="typing-dots">
-              <span /><span /><span />
-            </span>
+            <span className="typing-dots"><span /><span /><span /></span>
           </>
         )}
       </div>
 
       {/* Input */}
-      <MessageInput
-        roomId={activeRoomId}
-        replyTo={replyTo}
-        onClearReply={() => setReplyTo(null)}
-      />
+      <MessageInput roomId={activeRoomId} replyTo={replyTo} onClearReply={() => setReplyTo(null)} />
     </div>
   );
 }

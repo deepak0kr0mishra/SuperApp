@@ -42,7 +42,7 @@ export default function AuthPage() {
           <div className="auth-logo-icon">🌌</div>
           <div className="auth-logo-text">Nebula</div>
         </div>
-        <p className="auth-tagline">Ride the cosmic wave — encrypted spaces, voice orbits & instant codes ✦</p>
+        <p className="auth-tagline">Ride the cosmic wave — instant chats, spaces, voice orbits & codes ✦</p>
 
         <div className="auth-tabs">
           <button
@@ -127,12 +127,12 @@ export default function AuthPage() {
           </button>
         </form>
 
-        <div style={{ marginTop: 20, padding: '12px 14px', background: 'rgba(34,211,162,0.06)', border: '1px solid rgba(34,211,162,0.15)', borderRadius: 10 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--success)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>
-            🔒 End-to-End Encrypted
+        <div style={{ marginTop: 20, padding: '12px 14px', background: 'rgba(34,211,238,0.06)', border: '1px solid rgba(34,211,238,0.15)', borderRadius: 10 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#22d3ee', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>
+            ⚡ Fast & Simple Chat
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            Messages are encrypted in your browser. Not even the server can read them.
+            Instant messages, photos, videos & voice notes. Find anyone with their unique #code.
           </div>
         </div>
       </div>

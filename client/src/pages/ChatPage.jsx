@@ -16,16 +16,18 @@ function CreateRoomModal({ onClose, onCreated }) {
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!name.trim()) return;
     setLoading(true);
+    setError('');
     try {
       const { room } = await api.createRoom(name, desc, 'channel');
       onCreated(room);
     } catch (err) {
-      console.error(err);
+      setError(err.message || 'Could not create space');
     } finally {
       setLoading(false);
     }
@@ -35,12 +37,12 @@ function CreateRoomModal({ onClose, onCreated }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <div className="modal-title">Create Channel</div>
+          <div className="modal-title">Create Space</div>
           <button id="close-create-room-modal" className="icon-btn" onClick={onClose}>✕</button>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label className="form-label" htmlFor="new-channel-name">Channel Name</label>
+            <label className="form-label" htmlFor="new-channel-name">Space name</label>
             <input
               id="new-channel-name"
               className="form-input"
@@ -49,6 +51,7 @@ function CreateRoomModal({ onClose, onCreated }) {
               onChange={e => setName(e.target.value)}
               autoFocus
               required
+              maxLength={40}
             />
           </div>
           <div className="form-group">
@@ -56,92 +59,17 @@ function CreateRoomModal({ onClose, onCreated }) {
             <input
               id="new-channel-desc"
               className="form-input"
-              placeholder="What's this channel about?"
+              placeholder="What's this space about?"
               value={desc}
               onChange={e => setDesc(e.target.value)}
+              maxLength={120}
             />
           </div>
+          {error && <div className="form-error">{error}</div>}
           <button id="create-channel-submit" className="btn-primary" type="submit" disabled={loading || !name.trim()}>
-            {loading ? 'Creating…' : 'Create Channel'}
+            {loading ? 'Creating…' : 'Create Space'}
           </button>
         </form>
-      </div>
-    </div>
-  );
-}
-
-// --- New DM Modal (quick path — full search in UserSearch) ---
-function NewDMModal({ allUsers, currentUser, onClose, onDMCreated }) {
-  const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(false);
-  const q = search.trim().toLowerCase();
-  const filtered = allUsers.filter(u => {
-    if (u.id === currentUser?.id) return false;
-    if (!q) return true;
-    return (
-      u.username.toLowerCase().includes(q) ||
-      (u.display_name || '').toLowerCase().includes(q) ||
-      (u.user_code || '').toLowerCase().includes(q)
-    );
-  });
-
-  const handleSelect = async (targetUser) => {
-    setLoading(true);
-    try {
-      const { room } = await api.createDM(targetUser.id);
-      onDMCreated(room);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
-        <div className="modal-header">
-          <div className="modal-title">New Direct Message</div>
-          <button id="close-dm-modal" className="icon-btn" onClick={onClose}>✕</button>
-        </div>
-        <input
-          id="dm-search-input"
-          className="form-input"
-          placeholder="Search by name or #code (e.g. HPUQG2)…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          autoFocus
-          style={{ marginBottom: 12 }}
-        />
-        <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-          {filtered.length === 0 && (
-            <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: '20px 0', textAlign: 'center' }}>
-              No users found
-            </div>
-          )}
-          {filtered.map(u => (
-            <div
-              key={u.id}
-              id={`dm-user-${u.id}`}
-              className="member-row"
-              style={{ cursor: 'pointer' }}
-              onClick={() => !loading && handleSelect(u)}
-            >
-              <div className="avatar avatar-sm" style={{ background: u.avatar_color || '#6366f1' }}>
-                {(u.display_name || u.username)[0].toUpperCase()}
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                  {u.display_name || u.username}
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>@{u.username} {u.user_code ? `• #${u.user_code}` : ''}</div>
-              </div>
-              {u.user_code && (
-                <span className="code-chip">#{u.user_code}</span>
-              )}
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );
@@ -172,49 +100,56 @@ async function joinRoomAndFetchMembers(socket, roomId, setMembers, previousRoomI
   }
 }
 
+function isNarrowScreen() {
+  return typeof window !== 'undefined' && window.matchMedia('(max-width: 820px)').matches;
+}
+
 // --- Main Chat Page ---
 export default function ChatPage() {
   const { user } = useAuthStore();
   const {
     setRooms, addRoom, setAllUsers, setActiveRoom, setMembers,
-    appendMessage, deleteMessage, updateReactions,
-    setTyping, setUserStatus, rooms, activeRoomId,
+    rooms, activeRoomId,
   } = useChatStore();
-  const { setVoiceChannelMembers, setAllVoiceState, setPeerSpeaking } = useVoiceStore();
   const { toasts } = useToast();
 
+  const [activeTab, setActiveTab] = useState('chats');
   const [showCreateRoom, setShowCreateRoom] = useState(false);
-  const [showDM, setShowDM] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
-  const [showProfile, setShowProfile] = useState(false);
+  const [showOwnProfile, setShowOwnProfile] = useState(false);
+  const [profileUserId, setProfileUserId] = useState(null);
   const [showAdmin, setShowAdmin] = useState(false);
-  const allUsers = useChatStore(s => s.allUsers);
+  const [sidebarOpen, setSidebarOpen] = useState(() => !isNarrowScreen());
 
   const prevRoomId = useRef(null);
 
-  // FIX: Proper socket wiring — no stale socketBound guard (broke under StrictMode).
-  // Re-subscribes cleanly on user change / remount.
+  // Keep drawer in sync when resizing / when a room becomes active on mobile
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 820px)');
+    const onChange = (e) => setSidebarOpen(!e.matches || !useChatStore.getState().activeRoomId);
+    mq.addEventListener?.('change', onChange);
+    return () => mq.removeEventListener?.('change', onChange);
+  }, []);
+
   useEffect(() => {
     const socket = getSocket();
     if (!socket || !user) return;
-
     let cancelled = false;
 
-    // Initial data load — channels (general/media/random/audio) + users
-    // Refresh own profile too (gets user_code / role for sessions created before upgrade)
     useAuthStore.getState().refreshMe?.().catch(() => {});
     api.getRooms().then(({ rooms: r }) => {
       if (cancelled) return;
       setRooms(r);
-      // Auto-join first channel if none active
       const current = useChatStore.getState().activeRoomId;
       if (!current && r.length > 0) {
-        const first = r.find(rm => rm.type === 'channel') || r[0];
+        const dms = r.filter(rm => rm.type === 'dm');
+        const first = dms[0] || r.find(rm => rm.type === 'channel') || r[0];
         joinRoomAndFetchMembers(socket, first.id, setMembers, null);
         setActiveRoom(first.id);
         prevRoomId.current = first.id;
+        if (first.type === 'channel') setActiveTab('spaces');
+        if (isNarrowScreen()) setSidebarOpen(false);
       } else if (current) {
-        // Re-join active room after reconnect/remount to restore history
         joinRoomAndFetchMembers(socket, current, setMembers, null);
         prevRoomId.current = current;
       }
@@ -231,7 +166,6 @@ export default function ChatPage() {
     const onTyping = ({ userId, username, roomId, typing }) => useChatStore.getState().setTyping(roomId, userId, username, typing);
     const onStatus = ({ userId, status }) => {
       useChatStore.getState().setUserStatus(userId, status);
-      // Keep allUsers status in sync for voice lists / search
       const users = useChatStore.getState().allUsers.map(u => u.id === userId ? { ...u, status } : u);
       useChatStore.getState().setAllUsers(users);
     };
@@ -266,12 +200,14 @@ export default function ChatPage() {
     };
   }, [user?.id]);
 
-  // Handle room switch from sidebar — emit room:join + fetch members
   const handleRoomSelect = async (roomId) => {
     const socket = getSocket();
+    const room = rooms.find(r => r.id === roomId);
+    if (room) setActiveTab(room.type === 'dm' ? 'chats' : 'spaces');
     await joinRoomAndFetchMembers(socket, roomId, setMembers, prevRoomId.current);
     setActiveRoom(roomId);
     prevRoomId.current = roomId;
+    if (isNarrowScreen()) setSidebarOpen(false);
   };
 
   const handleRoomCreated = async (room) => {
@@ -282,49 +218,43 @@ export default function ChatPage() {
     await joinRoomAndFetchMembers(socket, room.id, setMembers, prevRoomId.current);
     setActiveRoom(room.id);
     prevRoomId.current = room.id;
+    setActiveTab('spaces');
+    if (isNarrowScreen()) setSidebarOpen(false);
   };
 
-  const handleDMCreated = async (room) => {
-    addRoom(room);
-    setShowDM(false);
-    const socket = getSocket();
-    await joinRoomAndFetchMembers(socket, room.id, setMembers, prevRoomId.current);
-    setActiveRoom(room.id);
-    prevRoomId.current = room.id;
+  const openPeerProfile = (peerUserId) => {
+    if (!peerUserId) return;
+    if (peerUserId === user?.id) setShowOwnProfile(true);
+    else setProfileUserId(peerUserId);
   };
 
   return (
-    <div className="app-layout">
+    <div className={`app-layout ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
       <div className="aurora-bg" aria-hidden="true">
         <span className="aurora-orb orb-1" />
         <span className="aurora-orb orb-2" />
         <span className="aurora-orb orb-3" />
       </div>
+      {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
       <Sidebar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
         onCreateRoom={() => setShowCreateRoom(true)}
-        onOpenDM={() => setShowDM(true)}
+        onOpenDM={() => setShowSearch(true)}
         onOpenSearch={() => setShowSearch(true)}
-        onOpenProfile={() => setShowProfile(true)}
+        onOpenProfile={() => setShowOwnProfile(true)}
         onOpenAdmin={() => setShowAdmin(true)}
         onRoomSelect={handleRoomSelect}
       />
-      <ChatPanel onOpenSearch={() => setShowSearch(true)} />
+      <ChatPanel
+        onOpenSearch={() => setShowSearch(true)}
+        onOpenProfile={openPeerProfile}
+        onToggleSidebar={() => setSidebarOpen(v => !v)}
+      />
       <MembersPanel />
 
       {showCreateRoom && (
-        <CreateRoomModal
-          onClose={() => setShowCreateRoom(false)}
-          onCreated={handleRoomCreated}
-        />
-      )}
-
-      {showDM && (
-        <NewDMModal
-          allUsers={allUsers}
-          currentUser={user}
-          onClose={() => setShowDM(false)}
-          onDMCreated={handleDMCreated}
-        />
+        <CreateRoomModal onClose={() => setShowCreateRoom(false)} onCreated={handleRoomCreated} />
       )}
 
       {showSearch && (
@@ -334,27 +264,31 @@ export default function ChatPage() {
             addRoom(room);
             setActiveRoom(room.id);
             prevRoomId.current = room.id;
+            setActiveTab('chats');
+            if (isNarrowScreen()) setSidebarOpen(false);
           }}
         />
       )}
 
-      {showProfile && (
-        <ProfileModal onClose={() => setShowProfile(false)} />
+      {showOwnProfile && <ProfileModal onClose={() => setShowOwnProfile(false)} />}
+
+      {profileUserId && (
+        <ProfileModal
+          userId={profileUserId}
+          onClose={() => setProfileUserId(null)}
+          onStartDM={(room) => {
+            prevRoomId.current = room.id;
+            setActiveTab('chats');
+            if (isNarrowScreen()) setSidebarOpen(false);
+          }}
+        />
       )}
 
-      {showAdmin && (
-        <AdminDashboard onClose={() => setShowAdmin(false)} />
-      )}
+      {showAdmin && <AdminDashboard onClose={() => setShowAdmin(false)} />}
 
-      {/* Toast notifications */}
       <div className="toast-container">
         {toasts.map(t => (
-          <div key={t.id} className={`toast ${t.type}`}>
-            {t.type === 'success' && '✅'}
-            {t.type === 'error' && '❌'}
-            {t.type === 'info' && 'ℹ️'}
-            {t.message}
-          </div>
+          <div key={t.id} className={`toast ${t.type}`}>{t.message}</div>
         ))}
       </div>
     </div>

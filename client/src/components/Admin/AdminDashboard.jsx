@@ -171,7 +171,7 @@ export default function AdminDashboard({ onClose }) {
                   <div key={m.id} className="admin-row">
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div className="admin-row-title">@{m.username} <span className="admin-row-sub">in #{m.room_name || m.room_id}</span></div>
-                      <div className="admin-row-sub">🔒 encrypted • {new Date(m.created_at * 1000).toLocaleString()} • {m.type}</div>
+                      <div className="admin-row-sub">{new Date(m.created_at * 1000).toLocaleString()} • {m.type}</div>
                     </div>
                     <button className="btn-mini danger" onClick={() => handleDeleteMessage(m)}>Remove</button>
                   </div>

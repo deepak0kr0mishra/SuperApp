@@ -4,7 +4,6 @@ import { useAuthStore } from '../../stores/authStore.js';
 import { useChatStore } from '../../stores/chatStore.js';
 import { getSocket } from '../../services/socket.js';
 import { api } from '../../services/api.js';
-import { encryptText, encryptFile } from '../../crypto/e2e.js';
 
 // --- Typing indicator hook ---
 function useTypingIndicator(roomId) {
@@ -39,24 +38,20 @@ function useTypingIndicator(roomId) {
 
 // --- Audio Recorder component ---
 function AudioRecorder({ onRecordingComplete, onCancel }) {
-  const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const [amplitude, setAmplitude] = useState(0);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
-  const analyserRef = useRef(null);
-  const animFrameRef = useRef(null);
   const streamRef = useRef(null);
 
   useEffect(() => {
     startRecording();
     return () => cleanup();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const cleanup = () => {
     if (timerRef.current) clearInterval(timerRef.current);
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     streamRef.current?.getTracks().forEach(t => t.stop());
   };
 
@@ -64,45 +59,21 @@ function AudioRecorder({ onRecordingComplete, onCancel }) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-
-      // Visualisation
-      const audioCtx = new AudioContext();
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      analyserRef.current = analyser;
-
-      const detectAmplitude = () => {
-        const data = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(data);
-        const avg = data.reduce((a, b) => a + b, 0) / data.length;
-        setAmplitude(avg);
-        animFrameRef.current = requestAnimationFrame(detectAmplitude);
-      };
-      detectAmplitude();
-
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm';
-
       const recorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
-
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
-
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: mimeType });
         onRecordingComplete(blob, mimeType);
         cleanup();
       };
-
-      recorder.start(100); // collect every 100ms
-      setRecording(true);
-
+      recorder.start(100);
       timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
     } catch (err) {
       console.error('Recording error:', err);
@@ -112,104 +83,45 @@ function AudioRecorder({ onRecordingComplete, onCancel }) {
 
   const stopRecording = () => {
     mediaRecorderRef.current?.stop();
-    setRecording(false);
   };
 
   const formatTime = (s) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
 
-  const bars = 20;
-  const normalizedAmp = Math.min(amplitude / 60, 1);
-
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 12,
-      background: 'rgba(244,63,94,0.08)',
-      border: '1px solid rgba(244,63,94,0.25)',
-      borderRadius: 12,
-      padding: '8px 14px',
-      marginBottom: 8,
-    }}>
-      {/* Recording dot */}
-      <div style={{
-        width: 10, height: 10, borderRadius: '50%',
-        background: 'var(--danger)',
-        animation: 'recording-pulse 1s infinite',
-        flexShrink: 0,
-      }} />
-
-      {/* Waveform visualiser */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 2, height: 28, flex: 1 }}>
-        {Array.from({ length: bars }).map((_, i) => {
-          const phase = (i / bars) * Math.PI * 2;
-          const h = 4 + normalizedAmp * 20 * Math.abs(Math.sin(phase + Date.now() / 200));
-          return (
-            <div
-              key={i}
-              style={{
-                width: 3,
-                height: Math.max(4, Math.min(24, h + Math.random() * normalizedAmp * 6)),
-                background: 'var(--danger)',
-                borderRadius: 2,
-                opacity: 0.6 + normalizedAmp * 0.4,
-                transition: 'height 0.1s ease',
-              }}
-            />
-          );
-        })}
-      </div>
-
-      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger)', flexShrink: 0, fontFamily: 'monospace' }}>
-        {formatTime(elapsed)}
-      </span>
-
-      {/* Cancel */}
-      <button
-        onClick={() => { cleanup(); onCancel(); }}
-        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text-muted)' }}
-        title="Cancel recording"
-      >🗑</button>
-
-      {/* Stop & Send */}
-      <button
-        id="stop-recording-btn"
-        onClick={stopRecording}
-        style={{
-          background: 'var(--danger)',
-          border: 'none',
-          borderRadius: 8,
-          padding: '6px 14px',
-          color: 'white',
-          fontSize: 13,
-          fontWeight: 600,
-          cursor: 'pointer',
-          flexShrink: 0,
-        }}
-      >
-        ⏹ Send
-      </button>
+    <div className="recorder-bar">
+      <div className="recorder-dot" />
+      <span className="recorder-time">{formatTime(elapsed)}</span>
+      <span className="recorder-hint">Recording…</span>
+      <button className="icon-btn" onClick={() => { cleanup(); onCancel(); }} title="Cancel recording">🗑</button>
+      <button id="stop-recording-btn" className="btn-record-send" onClick={stopRecording}>⏹ Send</button>
     </div>
   );
 }
 
-// --- Main MessageInput ---
+export function classifyFile(file, forceMime) {
+  const mime = forceMime || file.type || '';
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  return 'file';
+}
+
+// --- Main MessageInput (plain text, no encryption) ---
 export default function MessageInput({ roomId, replyTo, onClearReply }) {
   const [text, setText] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [sendError, setSendError] = useState('');
 
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const emojiRef = useRef(null);
 
-  const { user, keyPair } = useAuthStore();
-  const { rooms, members, getEncryptionKey } = useChatStore();
+  const { rooms } = useChatStore();
   const { startTyping, stopTyping } = useTypingIndicator(roomId);
 
-  // Close emoji picker on outside click
   useEffect(() => {
     const handler = (e) => {
       if (emojiRef.current && !emojiRef.current.contains(e.target)) {
@@ -220,37 +132,33 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const getKey = useCallback(async () => {
-    if (!keyPair || !user?.id || !roomId) throw new Error('Not ready');
-    return getEncryptionKey(roomId, keyPair, user.id);
-  }, [roomId, keyPair, user?.id, getEncryptionKey]);
-
-  // --- Send text message ---
+  // --- Send text message (plain) ---
   const sendTextMessage = async () => {
     const content = text.trim();
-    if (!content || !keyPair || !roomId) return;
-
+    if (!content || !roomId) return;
     setText('');
+    setSendError('');
     stopTyping();
     onClearReply?.();
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     const socket = getSocket();
-    if (!socket) return;
-
+    if (!socket) {
+      setSendError('Not connected. Reconnecting…');
+      setText(content);
+      return;
+    }
     try {
-      const key = await getKey();
-      const encrypted = await encryptText(content, key);
       socket.emit('message:send', {
         roomId,
-        encryptedContent: encrypted,
+        content,
         type: 'text',
         replyTo: replyTo?.id || null,
       });
     } catch (err) {
       console.error('Send error:', err);
+      setSendError('Failed to send. Try again.');
+      setText(content);
     }
   };
 
@@ -263,36 +171,26 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
 
   const handleChange = (e) => {
     setText(e.target.value);
-    startTyping();
+    if (e.target.value.trim()) startTyping();
+    else stopTyping();
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
   };
 
-  // --- Send file (image / audio / generic) ---
+  // --- Send file (plain upload, no encryption) ---
   const sendFile = async (file, forceMime) => {
-    if (!file || !roomId || !keyPair || !user?.id) return;
+    if (!file || !roomId) return;
     setUploading(true);
     setUploadProgress(0);
-
+    setSendError('');
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const key = await getKey();
-      const encryptedBuffer = await encryptFile(arrayBuffer, key);
-      const encryptedBlob = new Blob([encryptedBuffer]);
-      const encryptedFile = new File([encryptedBlob], file.name, { type: file.type || forceMime });
-
-      const result = await api.uploadFile(encryptedFile, roomId, (pct) => setUploadProgress(pct));
-
-      let type = 'file';
+      const result = await api.uploadFile(file, roomId, (pct) => setUploadProgress(pct));
       const mime = forceMime || file.type || '';
-      if (mime.startsWith('image/')) type = 'image';
-      else if (mime.startsWith('audio/')) type = 'audio';
-
-      const encryptedName = await encryptText(file.name, key);
+      const type = classifyFile(file, forceMime);
       const socket = getSocket();
       socket?.emit('message:send', {
         roomId,
-        encryptedContent: encryptedName,
+        content: file.name,
         type,
         fileId: result.fileId,
         fileName: file.name,
@@ -301,6 +199,7 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
       });
     } catch (err) {
       console.error('File send error:', err);
+      setSendError('Upload failed. Try a smaller file.');
     } finally {
       setUploading(false);
       setUploadProgress(null);
@@ -313,7 +212,6 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
     e.target.value = '';
   };
 
-  // --- Audio recording complete ---
   const handleRecordingComplete = async (blob, mimeType) => {
     setIsRecording(false);
     const ext = mimeType.includes('ogg') ? '.ogg' : '.webm';
@@ -334,26 +232,25 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
 
   return (
     <div className="message-input-area">
-      {/* Reply preview */}
       {replyTo && (
-        <div className="reply-preview" style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span>Replying to <strong>{replyTo.display_name || replyTo.username}</strong></span>
+        <div className="reply-preview">
+          <span>Replying to <strong>{replyTo.display_name || replyTo.username}</strong>: {(replyTo.content || replyTo.encrypted_content || '').slice(0, 80)}</span>
           <button className="icon-btn" style={{ width: 20, height: 20, fontSize: 12 }} onClick={onClearReply}>✕</button>
         </div>
       )}
 
-      {/* Upload progress */}
+      {sendError && <div className="send-error">{sendError}</div>}
+
       {uploading && uploadProgress !== null && (
         <div className="upload-progress">
-          <span>🔒 Encrypting & uploading…</span>
+          <span>Uploading…</span>
           <div className="progress-bar">
             <div className="progress-bar-fill" style={{ width: `${uploadProgress}%` }} />
           </div>
-          <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-muted)' }}>{uploadProgress}%</span>
+          <span className="progress-pct">{uploadProgress}%</span>
         </div>
       )}
 
-      {/* Audio recorder UI */}
       {isRecording && (
         <AudioRecorder
           onRecordingComplete={handleRecordingComplete}
@@ -361,39 +258,30 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
         />
       )}
 
-      {/* Main input box */}
       {!isRecording && (
         <div className="input-box">
-          {/* Hidden file input */}
           <input
             type="file"
             ref={fileInputRef}
             style={{ display: 'none' }}
-            accept="*/*"
+            accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.zip"
             onChange={handleFileSelect}
             id="file-attach-input"
           />
-
-          {/* Attach file */}
           <button
             id="attach-file-btn"
             className="input-action-btn"
             onClick={() => fileInputRef.current?.click()}
-            title="Attach file or photo"
+            title="Attach photo, video, or file"
             disabled={uploading}
           >📎</button>
-
-          {/* Audio record button — press to record voice note, then Send */}
           <button
             id="record-audio-btn"
             className="input-action-btn"
             onClick={() => setIsRecording(true)}
-            title="🎙️ Record voice note — press to start recording, then Send"
+            title="Record voice note"
             disabled={uploading}
-            style={{ color: 'var(--danger)', position: 'relative' }}
-          >🎙️<span style={{ position: 'absolute', top: 4, right: 4, width: 7, height: 7, borderRadius: '50%', background: 'var(--danger)', animation: 'recording-pulse 1.6s infinite' }} /></button>
-
-          {/* Text area */}
+          >🎙️</button>
           <textarea
             ref={textareaRef}
             id="message-textarea"
@@ -403,10 +291,9 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
             onKeyDown={handleKeyDown}
             rows={1}
             disabled={uploading}
+            maxLength={4000}
           />
-
           <div className="input-actions">
-            {/* Emoji picker */}
             <div style={{ position: 'relative' }} ref={emojiRef}>
               <button
                 id="emoji-picker-btn"
@@ -416,17 +303,10 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
               >😊</button>
               {showEmoji && (
                 <div className="emoji-picker-wrapper">
-                  <EmojiPicker
-                    onEmojiClick={onEmojiClick}
-                    theme="dark"
-                    skinTonesDisabled
-                    lazyLoadEmojis
-                  />
+                  <EmojiPicker onEmojiClick={onEmojiClick} theme="dark" skinTonesDisabled lazyLoadEmojis />
                 </div>
               )}
             </div>
-
-            {/* Send */}
             <button
               id="send-message-btn"
               className="send-btn"

@@ -100,8 +100,14 @@ io.on('connection', (socket) => {
         try { roomQueries.addMember.run(roomId, socket.userId); } catch {}
       }
       socket.join(`room:${roomId}`);
-      // Send last 100 messages
-      const messages = messageQueries.getByRoom.all(roomId);
+      // Send last 100 messages, enriched with reactions + plain `content`
+      // alias (DB column is still `encrypted_content` for backward compat).
+      const raw = messageQueries.getByRoom.all(roomId);
+      const messages = raw.map((m) => ({
+        ...m,
+        content: m.encrypted_content ?? '',
+        reactions: messageQueries.getReactions.all(m.id),
+      }));
       socket.emit('messages:history', { roomId, messages });
     } catch (err) {
       console.error('room:join error:', err);
@@ -112,17 +118,19 @@ io.on('connection', (socket) => {
     socket.leave(`room:${roomId}`);
   });
 
-  // --- Send message (encrypted) ---
-  socket.on('message:send', ({ roomId, encryptedContent, type, fileId, fileName, fileSize, fileMime, replyTo }) => {
+  // --- Send message (plain text, no E2E) ---
+  // Accepts new `content` plus legacy `encryptedContent` from old clients.
+  socket.on('message:send', ({ roomId, content, encryptedContent, type, fileId, fileName, fileSize, fileMime, replyTo }) => {
     try {
       const id = uuidv4();
       const user = userQueries.findById.get(socket.userId);
+      const text = (typeof content === 'string' && content) || encryptedContent || '';
 
       messageQueries.insert.run({
         id,
         room_id: roomId,
         sender_id: socket.userId,
-        encrypted_content: encryptedContent,
+        encrypted_content: text,
         type: type || 'text',
         file_id: fileId || null,
         file_name: fileName || null,
@@ -135,7 +143,8 @@ io.on('connection', (socket) => {
         id,
         room_id: roomId,
         sender_id: socket.userId,
-        encrypted_content: encryptedContent,
+        content: text,
+        encrypted_content: text,
         type: type || 'text',
         file_id: fileId || null,
         file_name: fileName || null,
@@ -146,6 +155,7 @@ io.on('connection', (socket) => {
         username: user.username,
         display_name: user.display_name,
         avatar_color: user.avatar_color,
+        reactions: [],
       };
 
       io.to(`room:${roomId}`).emit('message:new', message);

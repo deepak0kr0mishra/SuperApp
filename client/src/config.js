@@ -7,7 +7,7 @@
 // Fallback: paste it into LIVE_BACKEND_URL below and push.
 //
 // Local development ignores this and uses localhost like before.
-const LIVE_BACKEND_URL = 'https://PASTE-YOUR-BACKEND-URL-HERE';
+const LIVE_BACKEND_URL = 'https://superapp-server.onrender.com';
 
 const onLocalhost =
   typeof window !== 'undefined' &&

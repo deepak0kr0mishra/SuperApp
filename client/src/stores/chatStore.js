@@ -1,5 +1,23 @@
 import { create } from 'zustand';
-import { getKeyForRoom, encryptText, decryptText, encryptFile, decryptFile } from '../crypto/e2e.js';
+
+// Plain-text chat store (E2E encryption removed).
+// `decryptMessage` / `getEncryptionKey` etc. are kept as no-op shims so
+// older components keep working during the migration.
+
+export function messageText(msg) {
+  if (!msg) return '';
+  if (typeof msg.content === 'string' && msg.content) return msg.content;
+  if (typeof msg.encrypted_content === 'string') return msg.encrypted_content;
+  return '';
+}
+
+// Detect leftover E2E blobs (base64 AES-GCM) so we can label them instead
+// of showing gibberish.
+export function isLegacyEncryptedBlob(text) {
+  if (!text || typeof text !== 'string') return false;
+  if (text.length < 32 || text.length % 4 !== 0) return false;
+  return /^[A-Za-z0-9+/=]+$/.test(text);
+}
 
 export const useChatStore = create((set, get) => ({
   rooms: [],
@@ -15,7 +33,6 @@ export const useChatStore = create((set, get) => ({
 
   setAllUsers: (users) => set({ allUsers: users }),
 
-  // FIX: only set activeRoomId (removed spurious activeRoom key)
   setActiveRoom: (roomId) => {
     set({ activeRoomId: roomId });
     set(state => ({ unread: { ...state.unread, [roomId]: 0 } }));
@@ -29,17 +46,27 @@ export const useChatStore = create((set, get) => ({
     members: { ...state.members, [roomId]: members },
   })),
 
-  setMessages: (roomId, messages) => set(state => ({
-    messages: { ...state.messages, [roomId]: messages },
-  })),
+  setMessages: (roomId, messages) => set(state => {
+    const normalized = (messages || []).map((m) => ({
+      ...m,
+      content: messageText(m),
+      reactions: m.reactions || [],
+    }));
+    return { messages: { ...state.messages, [roomId]: normalized } };
+  }),
 
   appendMessage: (message) => set(state => {
     const roomMessages = state.messages[message.room_id] || [];
     if (roomMessages.find(m => m.id === message.id)) return {};
+    const normalized = {
+      ...message,
+      content: messageText(message),
+      reactions: message.reactions || [],
+    };
     return {
       messages: {
         ...state.messages,
-        [message.room_id]: [...roomMessages, message],
+        [message.room_id]: [...roomMessages, normalized],
       },
       unread: {
         ...state.unread,
@@ -78,72 +105,42 @@ export const useChatStore = create((set, get) => ({
     userStatuses: { ...state.userStatuses, [userId]: status },
   })),
 
-  // --- Crypto helpers ---
+  // --- Selectors ---
 
-  // FIX: pass real myUserId; await encryptText properly
-  encryptMessage: async (text, roomId, keyPair, myUserId) => {
-    const { members, rooms } = get();
-    const room = rooms.find(r => r.id === roomId);
-    const roomMembers = members[roomId] || [];
-    const key = await getKeyForRoom(
-      roomId,
-      room?.type || 'channel',
-      keyPair.privateKey,
-      roomMembers,
-      myUserId
-    );
-    return await encryptText(text, key);
-  },
+  getChannels: () => get().rooms.filter(r => r.type === 'channel'),
 
-  decryptMessage: async (encryptedContent, roomId, keyPair, myUserId) => {
-    if (!encryptedContent) return '';
-    const { members, rooms } = get();
-    const room = rooms.find(r => r.id === roomId);
-    const roomMembers = members[roomId] || [];
-    try {
-      const key = await getKeyForRoom(
-        roomId,
-        room?.type || 'channel',
-        keyPair.privateKey,
-        roomMembers,
-        myUserId
-      );
-      return await decryptText(encryptedContent, key);
-    } catch {
-      return '[🔒 Unable to decrypt]';
+  getDMs: () => get().rooms.filter(r => r.type === 'dm'),
+
+  // Resolve the other person in a DM from members (fallback: allUsers,
+  // fallback: parse legacy "alice-bob" room names).
+  getDMPeer: (room, myUserId) => {
+    const { members, allUsers } = get();
+    const roomMembers = members[room.id] || [];
+    let peer = roomMembers.find(m => m.id !== myUserId) || null;
+    if (!peer) {
+      const ids = String(room.name || '').split('-');
+      const otherName = ids.find(p => p && p !== allUsers.find(u => u.id === myUserId)?.username);
+      peer = allUsers.find(u => u.username === otherName) || null;
     }
+    return peer;
   },
 
-  encryptFileData: async (arrayBuffer, roomId, keyPair, myUserId) => {
-    const { members, rooms } = get();
-    const room = rooms.find(r => r.id === roomId);
-    const roomMembers = members[roomId] || [];
-    const key = await getKeyForRoom(
-      roomId, room?.type || 'channel',
-      keyPair.privateKey, roomMembers, myUserId
-    );
-    return encryptFile(arrayBuffer, key);
+  getLastMessage: (roomId) => {
+    const msgs = get().messages[roomId] || [];
+    return msgs.length ? msgs[msgs.length - 1] : null;
   },
 
-  decryptFileData: async (arrayBuffer, roomId, keyPair, myUserId) => {
-    const { members, rooms } = get();
-    const room = rooms.find(r => r.id === roomId);
-    const roomMembers = members[roomId] || [];
-    const key = await getKeyForRoom(
-      roomId, room?.type || 'channel',
-      keyPair.privateKey, roomMembers, myUserId
-    );
-    return decryptFile(arrayBuffer, key);
-  },
+  getUnreadCount: (roomId) => get().unread[roomId] || 0,
 
-  // Helper used by MessageInput directly
-  getEncryptionKey: async (roomId, keyPair, myUserId) => {
-    const { members, rooms } = get();
-    const room = rooms.find(r => r.id === roomId);
-    const roomMembers = members[roomId] || [];
-    return getKeyForRoom(
-      roomId, room?.type || 'channel',
-      keyPair.privateKey, roomMembers, myUserId
-    );
-  },
+  // --- Legacy crypto shims (no-ops, kept for compat) ---
+
+  encryptMessage: async (text) => text || '',
+
+  decryptMessage: async (ciphertext) => ciphertext || '',
+
+  encryptFileData: async (arrayBuffer) => arrayBuffer,
+
+  decryptFileData: async (arrayBuffer) => arrayBuffer,
+
+  getEncryptionKey: async () => null,
 }));

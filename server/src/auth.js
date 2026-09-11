@@ -126,11 +126,9 @@ router.get('/me', authenticateToken, (req, res) => {
   res.json({ user });
 });
 
-// PUT /api/auth/public-key
+// PUT /api/auth/public-key — legacy E2E endpoint, now a no-op.
+// Kept so old clients don't break; encryption has been removed.
 router.put('/public-key', authenticateToken, (req, res) => {
-  const { publicKey } = req.body;
-  if (!publicKey) return res.status(400).json({ error: 'Public key required' });
-  userQueries.updatePublicKey.run(publicKey, req.user.userId);
   res.json({ success: true });
 });
 
