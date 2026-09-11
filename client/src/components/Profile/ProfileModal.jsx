@@ -14,7 +14,7 @@ function timeAgo(ts) {
 // - onStartDM?: (room) => void — called after creating/opening a DM with peer.
 // - onClose: close modal.
 export default function ProfileModal({ userId, onClose, onStartDM }) {
-  const { user: me, updateProfile } = useAuthStore();
+  const { user: me, updateProfile, changePassword } = useAuthStore();
   const { userStatuses } = useChatStore();
   const isSelf = !userId || userId === me?.id;
 
@@ -27,6 +27,11 @@ export default function ProfileModal({ userId, onClose, onStartDM }) {
   const [bio, setBio] = useState(me?.bio || '');
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
+  const [currentPw, setCurrentPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwMsg, setPwMsg] = useState('');
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -212,6 +217,65 @@ export default function ProfileModal({ userId, onClose, onStartDM }) {
           {msg && <div className="profile-msg">{msg}</div>}
           <button id="save-profile-btn" className="btn-primary" type="submit" disabled={saving}>
             {saving ? 'Saving…' : 'Save profile ✦'}
+          </button>
+        </form>
+
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setPwMsg('');
+            if (newPw !== confirmPw) { setPwMsg('New passwords do not match'); return; }
+            setPwSaving(true);
+            try {
+              await changePassword(currentPw, newPw);
+              setPwMsg('Password changed ✦');
+              setCurrentPw(''); setNewPw(''); setConfirmPw('');
+            } catch (err) {
+              setPwMsg(err.message || 'Failed to change password');
+            } finally {
+              setPwSaving(false);
+              setTimeout(() => setPwMsg(''), 4000);
+            }
+          }}
+          style={{ marginTop: 18 }}
+        >
+          <div className="profile-code-label" style={{ marginBottom: 8 }}>Change password</div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="profile-current-pw">Current password</label>
+            <input
+              id="profile-current-pw"
+              type="password"
+              className="form-input"
+              value={currentPw}
+              onChange={e => setCurrentPw(e.target.value)}
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="profile-new-pw">New password (min 6)</label>
+            <input
+              id="profile-new-pw"
+              type="password"
+              className="form-input"
+              value={newPw}
+              onChange={e => setNewPw(e.target.value)}
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="profile-confirm-pw">Confirm new password</label>
+            <input
+              id="profile-confirm-pw"
+              type="password"
+              className="form-input"
+              value={confirmPw}
+              onChange={e => setConfirmPw(e.target.value)}
+              required
+            />
+          </div>
+          {pwMsg && <div className="profile-msg">{pwMsg}</div>}
+          <button id="change-password-btn" className="btn-primary" type="submit" disabled={pwSaving}>
+            {pwSaving ? 'Changing…' : 'Change password'}
           </button>
         </form>
       </div>

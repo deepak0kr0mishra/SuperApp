@@ -69,6 +69,10 @@ export const useAuthStore = create((set, get) => ({
     return user;
   },
 
+  changePassword: async (currentPassword, newPassword) => {
+    await api.changePassword(currentPassword, newPassword);
+  },
+
   refreshMe: async () => {
     try {
       const { user } = await api.me();

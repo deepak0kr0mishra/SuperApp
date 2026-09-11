@@ -102,6 +102,15 @@ export default function AdminDashboard({ onClose }) {
     } catch (err) { flash(err.message); }
   };
 
+  const handleResetPassword = async (u) => {
+    const np = prompt(`New password for @${u.username} (min 6 characters):`);
+    if (!np) return;
+    try {
+      await api.adminResetPassword(u.id, np);
+      flash(`Password reset for @${u.username}`);
+    } catch (err) { flash(err.message); }
+  };
+
   const handleCreateChannel = async (e) => {
     e?.preventDefault();
     if (!newChannel.trim()) return;
@@ -225,7 +234,7 @@ export default function AdminDashboard({ onClose }) {
                 <div className="admin-stat"><div className="admin-stat-num">{stats.messagesToday ?? 0}</div><div className="admin-stat-label">📅 Today</div></div>
                 <div className="admin-stat"><div className="admin-stat-num">{stats.rooms}</div><div className="admin-stat-label">✨ Spaces</div></div>
                 <div className="admin-stat"><div className="admin-stat-num">{stats.activeConversations ?? 0}</div><div className="admin-stat-label">🔥 Active (7d)</div></div>
-                <div className="admin-hint">Tip: first registered user is auto-admin. Promote others in Users tab.</div>
+                <div className="admin-hint">Fixed admins: Admin_01…Admin_05 (max 5). Admin passwords can't be reset — each admin changes their own in Profile.</div>
               </div>
             )}
 
@@ -255,6 +264,9 @@ export default function AdminDashboard({ onClose }) {
                         {u.role === 'admin'
                           ? <button className="btn-mini" onClick={() => handleRole(u, 'user')}>Demote</button>
                           : <button className="btn-mini primary" onClick={() => handleRole(u, 'admin')}>Make admin</button>}
+                        {u.role !== 'admin' && (
+                          <button className="btn-mini" onClick={() => handleResetPassword(u)}>Reset PW</button>
+                        )}
                         <button className="btn-mini" onClick={() => handleDisable(u)}>{u.is_disabled ? 'Enable' : 'Disable'}</button>
                         <button className="btn-mini danger" onClick={() => handleDeleteUser(u)}>Delete</button>
                       </div>

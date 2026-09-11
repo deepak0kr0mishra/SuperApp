@@ -205,6 +205,31 @@ router.put('/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// PUT /api/auth/password — change own password. { currentPassword, newPassword }
+router.put('/password', authenticateToken, authLimiter, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current and new password are required' });
+    }
+    const pErr = validatePassword(newPassword);
+    if (pErr) return res.status(400).json({ error: pErr });
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ error: 'New password must be different' });
+    }
+    const raw = userQueries.findRawById?.get(req.user.userId) || userQueries.findByUsername.get(req.user.username);
+    if (!raw) return res.status(404).json({ error: 'User not found' });
+    const valid = await bcrypt.compare(currentPassword, raw.password_hash);
+    if (!valid) return res.status(401).json({ error: 'Current password is incorrect' });
+    const password_hash = await bcrypt.hash(newPassword, 12);
+    userQueries.updatePassword.run(password_hash, req.user.userId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Password change error:', err);
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
 export function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];

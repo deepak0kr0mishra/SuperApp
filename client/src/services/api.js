@@ -63,6 +63,8 @@ export const api = {
     request('PUT', '/auth/public-key', { publicKey: JSON.stringify(publicKey) }),
   updateProfile: (display_name, bio) =>
     request('PUT', '/auth/profile', { display_name, bio }),
+  changePassword: (currentPassword, newPassword) =>
+    request('PUT', '/auth/password', { currentPassword, newPassword }),
 
   // Users — profile system with unique code search
   getAllUsers: () => request('GET', '/rooms/users/all'),
@@ -76,6 +78,7 @@ export const api = {
   adminPatchUser: (id, patch) => request('PATCH', `/admin/users/${id}`, patch),
   adminDisableUser: (id) => request('POST', `/admin/users/${id}/disable`),
   adminEnableUser: (id) => request('POST', `/admin/users/${id}/enable`),
+  adminResetPassword: (id, newPassword) => request('POST', `/admin/users/${id}/reset-password`, { newPassword }),
   adminDeleteUser: (id) => request('DELETE', `/admin/users/${id}`),
   adminGetRooms: () => request('GET', '/admin/rooms'),
   adminCreateRoom: (name, description) => request('POST', '/admin/rooms', { name, description }),

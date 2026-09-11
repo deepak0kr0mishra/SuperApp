@@ -1,8 +1,10 @@
 import express from 'express';
+import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import { userQueries, roomQueries, messageQueries, reportQueries, voiceChannelQueries } from './db.js';
+import { userQueries, roomQueries, messageQueries, reportQueries, voiceChannelQueries, isFixedAdmin } from './db.js';
 import db from './db.js';
 import { authenticateToken } from './auth.js';
+import { validatePassword } from './security.js';
 
 const router = express.Router();
 
@@ -11,6 +13,28 @@ function requireAdmin(req, res, next) {
   if (!me || me.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   req.me = me;
   next();
+}
+
+function adminCount() {
+  try {
+    return db.prepare(`SELECT COUNT(*) as c FROM users WHERE role = 'admin'`).get()?.c ?? 0;
+  } catch { return 0; }
+}
+
+// Only 5 admins exist (Admin_01..Admin_05). Promotions are blocked at the cap,
+// and fixed admins can never be demoted, disabled, or deleted.
+function guardRoleChange(target, role, selfId) {
+  if (!target) return 'User not found';
+  if (role === 'admin' && target.role !== 'admin' && adminCount() >= 5) {
+    return 'Admin limit reached (max 5)';
+  }
+  if (isFixedAdmin(target) && role !== 'admin') {
+    return `${target.username} is a fixed admin and cannot be demoted`;
+  }
+  if (target.id === selfId && role !== 'admin') {
+    return 'You cannot demote yourself';
+  }
+  return null;
 }
 
 router.use(authenticateToken, requireAdmin);
@@ -51,11 +75,12 @@ router.get('/users', (req, res) => {
 router.put('/users/:id/role', (req, res) => {
   const { role } = req.body;
   if (!['admin', 'user'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
-  if (req.params.id === req.user.userId && role !== 'admin') {
-    return res.status(400).json({ error: 'You cannot demote yourself' });
-  }
   const target = userQueries.findById.get(req.params.id);
-  if (!target) return res.status(404).json({ error: 'User not found' });
+  const problem = guardRoleChange(target, role, req.user.userId);
+  if (problem) {
+    const code = problem === 'User not found' ? 404 : 400;
+    return res.status(code).json({ error: problem });
+  }
   userQueries.updateRole.run(role, req.params.id);
   res.json({ success: true });
 });
@@ -67,12 +92,17 @@ router.patch('/users/:id', (req, res) => {
   const { role, is_disabled } = req.body;
   if (role !== undefined) {
     if (!['admin', 'user'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
-    if (req.params.id === req.user.userId && role !== 'admin') {
-      return res.status(400).json({ error: 'You cannot demote yourself' });
+    const problem = guardRoleChange(target, role, req.user.userId);
+    if (problem) {
+      const code = problem === 'User not found' ? 404 : 400;
+      return res.status(code).json({ error: problem });
     }
     userQueries.updateRole.run(role, req.params.id);
   }
   if (is_disabled !== undefined) {
+    if (isFixedAdmin(target)) {
+      return res.status(400).json({ error: `${target.username} is a fixed admin and cannot be disabled` });
+    }
     if (req.params.id === req.user.userId) {
       return res.status(400).json({ error: 'You cannot disable yourself' });
     }
@@ -83,9 +113,10 @@ router.patch('/users/:id', (req, res) => {
 
 // POST /api/admin/users/:id/disable — disable account (keeps data, blocks login)
 router.post('/users/:id/disable', (req, res) => {
-  if (req.params.id === req.user.userId) return res.status(400).json({ error: 'You cannot disable yourself' });
   const target = userQueries.findById.get(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found' });
+  if (isFixedAdmin(target)) return res.status(400).json({ error: `${target.username} is a fixed admin and cannot be disabled` });
+  if (req.params.id === req.user.userId) return res.status(400).json({ error: 'You cannot disable yourself' });
   userQueries.setDisabled.run(1, req.params.id);
   res.json({ success: true });
 });
@@ -98,11 +129,34 @@ router.post('/users/:id/enable', (req, res) => {
   res.json({ success: true });
 });
 
+// POST /api/admin/users/:id/reset-password — { newPassword }
+// Admins may reset any REGULAR user's password. Admin passwords can never
+// be changed by another admin (not even fixed ones); admins change their own
+// via PUT /api/auth/password.
+router.post('/users/:id/reset-password', async (req, res) => {
+  try {
+    const target = userQueries.findById.get(req.params.id);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    if (target.role === 'admin' || isFixedAdmin(target)) {
+      return res.status(403).json({ error: 'Admin passwords cannot be reset by other admins' });
+    }
+    const pErr = validatePassword(req.body?.newPassword);
+    if (pErr) return res.status(400).json({ error: pErr });
+    const password_hash = await bcrypt.hash(req.body.newPassword, 12);
+    userQueries.updatePassword.run(password_hash, req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Admin reset-password error:', err);
+    res.status(500).json({ error: 'Failed to reset password' });
+  }
+});
+
 // DELETE /api/admin/users/:id
 router.delete('/users/:id', (req, res) => {
-  if (req.params.id === req.user.userId) return res.status(400).json({ error: 'You cannot delete yourself' });
   const target = userQueries.findById.get(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found' });
+  if (isFixedAdmin(target)) return res.status(400).json({ error: `${target.username} is a fixed admin and cannot be deleted` });
+  if (req.params.id === req.user.userId) return res.status(400).json({ error: 'You cannot delete yourself' });
   // Delete user's messages, memberships, files records (keep files on disk, harmless)
   db.prepare('DELETE FROM messages WHERE sender_id = ?').run(req.params.id);
   db.prepare('DELETE FROM room_members WHERE user_id = ?').run(req.params.id);

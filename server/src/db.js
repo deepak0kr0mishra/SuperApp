@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import bcrypt from 'bcryptjs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { mkdirSync } from 'fs';
@@ -260,6 +261,63 @@ const backfillUsers = () => {
 
 backfillUsers();
 
+// --- Fixed admin accounts: exactly 5, Admin_01..Admin_05, password "***REMOVED***" ---
+// These are the only admins. Seeded on every boot (missing ones are created,
+// existing ones are re-affirmed as enabled admins); any other admin accounts
+// are demoted to regular users so the total stays at 5.
+export const FIXED_ADMIN_USERNAMES = ['Admin_01', 'Admin_02', 'Admin_03', 'Admin_04', 'Admin_05'];
+export const FIXED_ADMIN_IDS = ['admin-01', 'admin-02', 'admin-03', 'admin-04', 'admin-05'];
+export const isFixedAdmin = (user) =>
+  !!user && (FIXED_ADMIN_IDS.includes(user.id) || FIXED_ADMIN_USERNAMES.includes(user.username));
+
+const seedFixedAdmins = () => {
+  try {
+    const hash = bcrypt.hashSync('***REMOVED***', 12);
+    for (let i = 0; i < 5; i++) {
+      const username = FIXED_ADMIN_USERNAMES[i];
+      const id = FIXED_ADMIN_IDS[i];
+      const existing =
+        db.prepare('SELECT * FROM users WHERE id = ?').get(id) ||
+        db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+      if (!existing) {
+        let user_code = generateUserCode();
+        for (let a = 0; a < 10 && db.prepare('SELECT 1 FROM users WHERE user_code = ?').get(user_code); a++) {
+          user_code = generateUserCode();
+        }
+        let uid = generateUID();
+        for (let a = 0; a < 10 && db.prepare('SELECT 1 FROM users WHERE uid = ?').get(uid); a++) {
+          uid = generateUID();
+        }
+        db.prepare(`
+          INSERT INTO users (id, uid, username, email, display_name, password_hash, avatar_color, user_code, bio, role, is_disabled)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'admin', 0)
+        `).run(id, uid, username, `admin_0${i + 1}@teachat.local`, `Admin 0${i + 1}`, hash, '#b06a1f', user_code, 'TeaChat administrator');
+        console.log(`  [seed] created fixed admin ${username}`);
+      } else {
+        // Re-affirm: fixed admins are always enabled admins. Passwords are
+        // never touched here (admins change their own via /auth/password).
+        db.prepare(`UPDATE users SET role = 'admin', is_disabled = 0 WHERE id = ?`).run(existing.id);
+      }
+      // Fixed admins belong to every public channel.
+      try {
+        const channels = db.prepare(`SELECT id FROM rooms WHERE type = 'channel'`).all();
+        const add = db.prepare('INSERT OR IGNORE INTO room_members (room_id, user_id) VALUES (?, ?)');
+        for (const ch of channels) add.run(ch.id, existing?.id || id);
+      } catch {}
+    }
+    // Demote everyone else so there are exactly 5 admins.
+    const placeholders = FIXED_ADMIN_USERNAMES.map(() => '?').join(',');
+    const res = db.prepare(
+      `UPDATE users SET role = 'user' WHERE role = 'admin' AND username NOT IN (${placeholders}) AND id != 'system'`
+    ).run(...FIXED_ADMIN_USERNAMES);
+    if (res.changes > 0) console.log(`  [seed] demoted ${res.changes} non-fixed admin(s) to user`);
+  } catch (err) {
+    console.error('  [seed] fixed-admin seeding failed:', err.message);
+  }
+};
+
+seedFixedAdmins();
+
 const PUBLIC_USER_COLS =
   'id, uid, username, display_name, avatar_color, status, user_code, bio, role, email, is_disabled, created_at';
 
@@ -289,6 +347,7 @@ export const userQueries = {
   updatePublicKey: db.prepare('UPDATE users SET public_key = ? WHERE id = ?'),
   updateStatus: db.prepare('UPDATE users SET status = ? WHERE id = ?'),
   updateProfile: db.prepare('UPDATE users SET display_name = COALESCE(?, display_name), bio = COALESCE(?, bio) WHERE id = ?'),
+  updatePassword: db.prepare('UPDATE users SET password_hash = ? WHERE id = ?'),
   updateRole: db.prepare('UPDATE users SET role = ? WHERE id = ?'),
   setDisabled: db.prepare('UPDATE users SET is_disabled = ? WHERE id = ?'),
   deleteById: db.prepare('DELETE FROM users WHERE id = ?'),
