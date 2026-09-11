@@ -1577,9 +1577,9 @@ audio::-webkit-media-controls-panel { background: var(--bg-elevated); }
   background: var(--bg-overlay); border: 1px solid var(--border-subtle);
   border-radius: 12px; padding: 10px 12px;
 }
-.admin-row-title { font-size: 13px; font-weight: 700; }
-.admin-row-sub { font-size: 11px; color: var(--text-muted); }
-.admin-row-actions { display: flex; gap: 6px; }
+.admin-row-title { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.admin-row-sub { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.admin-row-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
 .btn-mini {
   border: 1px solid var(--border-default); background: var(--bg-elevated);
   color: var(--text-secondary); font-size: 11px; font-weight: 700;
