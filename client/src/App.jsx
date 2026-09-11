@@ -32,6 +32,14 @@ function LoadingScreen() {
 export default function App() {
   const { user, isLoading, initialize } = useAuthStore();
 
+  // Apply saved theme (light tea / dark roast) before anything renders
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('teachat_theme') || 'light';
+      document.documentElement.dataset.theme = saved === 'dark' ? 'dark' : 'light';
+    } catch {}
+  }, []);
+
   useEffect(() => {
     initialize();
   }, []);

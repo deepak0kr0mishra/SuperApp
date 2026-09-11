@@ -1226,6 +1226,74 @@ audio::-webkit-media-controls-panel { background: var(--bg-elevated); }
   to { opacity: 1; transform: translateX(0) scale(1); }
 }
 
+/* ═══════════════════════════════════════════════════
+   TEACHAT — Dark Roast Mode
+   Activated via [data-theme="dark"] on <html>. Toggle in sidebar.
+   ═══════════════════════════════════════════════════ */
+
+[data-theme="dark"] {
+  --bg-base: #171009;
+  --bg-surface: #201510;
+  --bg-elevated: #2b1d12;
+  --bg-overlay: #342416;
+  --bg-hover: #3c2a19;
+  --bg-active: #4a3420;
+
+  --glass-bg: rgba(217, 154, 61, 0.06);
+  --glass-border: rgba(217, 154, 61, 0.14);
+  --glass-hover: rgba(217, 154, 61, 0.1);
+
+  --brand-primary: #d99a3d;
+  --brand-secondary: #e8c98a;
+  --brand-glow: rgba(217, 154, 61, 0.35);
+  --brand-gradient: linear-gradient(135deg, #e8c98a 0%, #d99a3d 55%, #b06a1f 100%);
+  --brand-gradient-subtle: linear-gradient(135deg, rgba(217,154,61,0.25) 0%, rgba(176,106,31,0.15) 100%);
+
+  --bubble-self: #c98a2e;
+  --bubble-self-text: #241503;
+  --bubble-other: #2b1d12;
+  --bubble-other-text: #f3e7d3;
+
+  --success: #5cb86f;
+  --warning: #d99a3d;
+  --danger: #e0604f;
+  --info: #5aa9c9;
+
+  --text-primary: #f3e7d3;
+  --text-secondary: #c9ab7f;
+  --text-muted: #8d7557;
+  --text-accent: #e8c98a;
+
+  --border-subtle: rgba(232, 201, 138, 0.1);
+  --border-default: rgba(232, 201, 138, 0.18);
+  --border-strong: rgba(232, 201, 138, 0.3);
+  --border-brand: rgba(217, 154, 61, 0.5);
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.5);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.55);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,0.65);
+  --shadow-brand: 0 0 30px rgba(217,154,61,0.25);
+}
+
+/* Hardcoded light surfaces need explicit dark variants */
+[data-theme="dark"] .sidebar {
+  background: linear-gradient(180deg, rgba(32,21,16,0.98) 0%, rgba(23,16,9,0.98) 100%);
+}
+[data-theme="dark"] .topbar {
+  background: rgba(32, 21, 16, 0.9);
+}
+[data-theme="dark"] .aurora-orb.orb-1 { background: #7c4d16; opacity: 0.3; }
+[data-theme="dark"] .aurora-orb.orb-2 { background: #5c360e; opacity: 0.28; }
+[data-theme="dark"] .aurora-orb.orb-3 { background: #3a2812; opacity: 0.5; }
+[data-theme="dark"] .code-chip { color: #e8c98a; }
+[data-theme="dark"] .admin-chip { color: #e8c98a; }
+[data-theme="dark"] .profile-code-value { color: #e8c98a; }
+[data-theme="dark"] .btn-mini.primary { color: #e8c98a; }
+[data-theme="dark"] .message-row.mine .message-time { color: rgba(36, 21, 3, 0.7); }
+[data-theme="dark"] ::-webkit-scrollbar-thumb { background: rgba(232,201,138,0.25); }
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: rgba(232,201,138,0.4); }
+[data-theme="dark"] ::selection { background: rgba(217,154,61,0.5); color: #241503; }
+
 /* ─── DM list ──────────────────────────────────── */
 .dm-item {
   display: flex;

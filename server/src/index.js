@@ -49,7 +49,7 @@ const io = new Server(httpServer, {
 // --- Middleware ---
 app.use(securityHeaders());
 app.use(cors({ origin: corsOrigin, credentials: true }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '25mb' })); // room for /api/admin/restore payloads
 app.use('/api/', generalLimiter);
 
 // --- REST Routes ---

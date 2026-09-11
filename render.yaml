@@ -18,3 +18,9 @@ services:
         generateValue: true
       - key: CLIENT_URL
         sync: false # set in dashboard to https://deepak0kr0mishra.github.io (comma-separated list allowed)
+    # PERSISTENCE UPGRADE (paid Starter plan and up):
+    # Free Render has NO disk — every redeploy wipes SQLite + uploads.
+    # Until then use Admin → Download backup before updating, Restore after.
+    # To enable real persistence later: upgrade to Starter, add a disk with
+    #   name: superapp-data, mountPath: /var/superapp-data, sizeGB: 1
+    # and set env DATA_DIR=/var/superapp-data. No code changes needed.

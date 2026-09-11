@@ -261,10 +261,13 @@ const backfillUsers = () => {
 
 backfillUsers();
 
-// --- Fixed admin accounts: exactly 5, Admin_01..Admin_05, password "***REMOVED***" ---
-// These are the only admins. Seeded on every boot (missing ones are created,
-// existing ones are re-affirmed as enabled admins); any other admin accounts
-// are demoted to regular users so the total stays at 5.
+// --- Fixed admin accounts: Admin_01..Admin_05, password "***REMOVED***" ---
+// Total admin capacity is 10: the 5 fixed admins (always admin, protected)
+// plus up to 5 promotable slots for regular users. Seeded on every boot
+// (missing fixed ones are created, existing fixed ones are re-affirmed as
+// enabled admins); if there are more than 5 non-fixed admins, the extras
+// (newest accounts first) are demoted so the total stays within 10.
+export const MAX_ADMINS = 10;
 export const FIXED_ADMIN_USERNAMES = ['Admin_01', 'Admin_02', 'Admin_03', 'Admin_04', 'Admin_05'];
 export const FIXED_ADMIN_IDS = ['admin-01', 'admin-02', 'admin-03', 'admin-04', 'admin-05'];
 export const isFixedAdmin = (user) =>
@@ -305,12 +308,17 @@ const seedFixedAdmins = () => {
         for (const ch of channels) add.run(ch.id, existing?.id || id);
       } catch {}
     }
-    // Demote everyone else so there are exactly 5 admins.
+    // Trim non-fixed admins down to the 5 promotable slots (newest first).
     const placeholders = FIXED_ADMIN_USERNAMES.map(() => '?').join(',');
-    const res = db.prepare(
-      `UPDATE users SET role = 'user' WHERE role = 'admin' AND username NOT IN (${placeholders}) AND id != 'system'`
-    ).run(...FIXED_ADMIN_USERNAMES);
-    if (res.changes > 0) console.log(`  [seed] demoted ${res.changes} non-fixed admin(s) to user`);
+    const extras = db.prepare(
+      `SELECT id FROM users WHERE role = 'admin' AND username NOT IN (${placeholders}) AND id != 'system' ORDER BY rowid DESC`
+    ).all(...FIXED_ADMIN_USERNAMES);
+    const over = extras.length - (MAX_ADMINS - FIXED_ADMIN_USERNAMES.length);
+    if (over > 0) {
+      const demote = db.prepare(`UPDATE users SET role = 'user' WHERE id = ?`);
+      for (let k = 0; k < over; k++) demote.run(extras[k].id);
+      console.log(`  [seed] demoted ${over} extra admin(s) to user (cap ${MAX_ADMINS})`);
+    }
   } catch (err) {
     console.error('  [seed] fixed-admin seeding failed:', err.message);
   }

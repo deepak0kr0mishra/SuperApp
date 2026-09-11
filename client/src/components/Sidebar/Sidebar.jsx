@@ -34,6 +34,18 @@ function previewOf(msg) {
 export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM, onOpenSearch, onOpenProfile, onOpenAdmin, onRoomSelect }) {
   const { user, logout } = useAuthStore();
   const { rooms, activeRoomId, unread, allUsers, userStatuses, members, messages, voiceChannels } = useChatStore();
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('teachat_theme') || 'light'; } catch { return 'light'; }
+  });
+
+  const toggleTheme = () => {
+    const next = theme === 'light' ? 'dark' : 'light';
+    setTheme(next);
+    try {
+      localStorage.setItem('teachat_theme', next);
+      document.documentElement.dataset.theme = next;
+    } catch {}
+  };
   const { currentChannelId, voiceChannelMembers, speakingUsers, joinVoiceChannel, leaveVoiceChannel, isMuted, toggleMute } = useVoiceStore();
   const [filter, setFilter] = useState('');
 
@@ -223,6 +235,9 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
         {isAdmin && (
           <button id="sidebar-admin-btn" className="icon-btn" onClick={onOpenAdmin} title="Admin dashboard">🛡️</button>
         )}
+        <button id="sidebar-theme-btn" className="icon-btn" onClick={toggleTheme} title={theme === 'light' ? 'Dark mode' : 'Light mode'}>
+          {theme === 'light' ? '🌙' : '☀️'}
+        </button>
         {currentChannelId && (
           <button id="sidebar-mute-btn" className={`icon-btn ${isMuted ? 'danger' : ''}`} onClick={(e) => { e.stopPropagation(); toggleMute(); }} title={isMuted ? 'Unmute' : 'Mute'}>
             {isMuted ? '🔇' : '🎙️'}

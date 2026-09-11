@@ -171,8 +171,35 @@ export default function AdminDashboard({ onClose }) {
     } catch (err) { flash(err.message); }
   };
 
-  const handleReport = async (r, action) => {
+  const handleBackup = async () => {
     try {
+      const data = await api.adminBackup();
+      const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `teachat-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      flash('Backup downloaded — keep it safe');
+    } catch (err) { flash(err.message); }
+  };
+
+  const handleRestoreFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!confirm(`Restore from ${file.name}? This REPLACES all current data.`)) return;
+    try {
+      const text = await file.text();
+      const backup = JSON.parse(text);
+      const res = await api.adminRestore(backup);
+      const n = res.restored?.users ?? 0;
+      flash(`Restored ${n} users — reloading…`);
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (err) { flash(err.message || 'Restore failed'); }
+  };
+
+  const handleReport = async (r, action) => {    try {
       await api.adminResolveReport(r.id, action);
       setReports(prev => prev.map(x => x.id === r.id
         ? { ...x, status: action === 'dismiss' ? 'dismissed' : 'resolved' }
@@ -234,7 +261,15 @@ export default function AdminDashboard({ onClose }) {
                 <div className="admin-stat"><div className="admin-stat-num">{stats.messagesToday ?? 0}</div><div className="admin-stat-label">📅 Today</div></div>
                 <div className="admin-stat"><div className="admin-stat-num">{stats.rooms}</div><div className="admin-stat-label">✨ Spaces</div></div>
                 <div className="admin-stat"><div className="admin-stat-num">{stats.activeConversations ?? 0}</div><div className="admin-stat-label">🔥 Active (7d)</div></div>
-                <div className="admin-hint">Fixed admins: Admin_01…Admin_05 (max 5). Admin passwords can't be reset — each admin changes their own in Profile.</div>
+                <div className="admin-hint">10 slots: Admin_01…Admin_05 fixed + up to 5 promotable. Admin passwords can't be reset — each admin changes their own in Profile.</div>
+                <div className="admin-hint">
+                  ⚠️ Free hosting wipes data on every update —{' '}
+                  <button className="btn-mini primary" onClick={handleBackup}>Download backup</button>{' '}
+                  <label className="btn-mini" style={{ cursor: 'pointer' }}>
+                    Restore backup
+                    <input type="file" accept="application/json" style={{ display: 'none' }} onChange={handleRestoreFile} />
+                  </label>
+                </div>
               </div>
             )}
 

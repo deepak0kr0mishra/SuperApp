@@ -1,7 +1,7 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import { userQueries, roomQueries, messageQueries, reportQueries, voiceChannelQueries, isFixedAdmin } from './db.js';
+import { userQueries, roomQueries, messageQueries, reportQueries, voiceChannelQueries, isFixedAdmin, MAX_ADMINS } from './db.js';
 import db from './db.js';
 import { authenticateToken } from './auth.js';
 import { validatePassword } from './security.js';
@@ -21,12 +21,12 @@ function adminCount() {
   } catch { return 0; }
 }
 
-// Only 5 admins exist (Admin_01..Admin_05). Promotions are blocked at the cap,
-// and fixed admins can never be demoted, disabled, or deleted.
+// 5 fixed admins (Admin_01..Admin_05) + up to 5 promotable slots = max 10.
+// Fixed admins can never be demoted, disabled, or deleted.
 function guardRoleChange(target, role, selfId) {
   if (!target) return 'User not found';
-  if (role === 'admin' && target.role !== 'admin' && adminCount() >= 5) {
-    return 'Admin limit reached (max 5)';
+  if (role === 'admin' && target.role !== 'admin' && adminCount() >= MAX_ADMINS) {
+    return `Admin limit reached (max ${MAX_ADMINS})`;
   }
   if (isFixedAdmin(target) && role !== 'admin') {
     return `${target.username} is a fixed admin and cannot be demoted`;
@@ -276,6 +276,76 @@ router.delete('/messages/:id', (req, res) => {
   res.json({ success: true, room_id: msg.room_id, messageId: msg.id });
 });
 
+// --- Backup & restore (survive Render free-tier wipes) ---
+// Render free has no persistent disk: every redeploy/restart wipes SQLite +
+// uploads. Download a backup BEFORE updating, restore AFTER the new version
+// is live. Includes users (with password hashes), rooms, memberships,
+// messages (+edits/deletes), reactions, reports, reads, voice channels.
+// File *metadata* is included but uploaded *blobs* can't survive a wipe,
+// so old media messages may show as missing after a restore.
+const BACKUP_TABLES = [
+  'users', 'rooms', 'room_members', 'messages', 'reactions',
+  'files', 'reports', 'room_reads', 'voice_channels',
+];
+
+// GET /api/admin/backup — download full JSON dump
+router.get('/backup', (req, res) => {
+  try {
+    const tables = {};
+    for (const t of BACKUP_TABLES) {
+      try {
+        tables[t] = db.prepare(`SELECT * FROM ${t}`).all();
+      } catch { tables[t] = []; }
+    }
+    res.setHeader('Content-Disposition', `attachment; filename="teachat-backup-${new Date().toISOString().slice(0, 10)}.json"`);
+    res.json({ app: 'TeaChat', version: 1, exportedAt: Math.floor(Date.now() / 1000), tables });
+  } catch (err) {
+    console.error('Backup error:', err);
+    res.status(500).json({ error: 'Backup failed' });
+  }
+});
+
+// POST /api/admin/restore — { backup } full replace from a previous dump
+router.post('/restore', (req, res) => {
+  const backup = req.body?.backup;
+  if (!backup || typeof backup !== 'object' || !backup.tables) {
+    return res.status(400).json({ error: 'Invalid backup file' });
+  }
+  try {
+    const tables = backup.tables;
+    const txn = db.transaction(() => {
+      // Clear in dependency-safe order
+      for (const t of ['reactions', 'room_reads', 'reports', 'messages', 'room_members', 'files', 'rooms', 'voice_channels']) {
+        try { db.prepare(`DELETE FROM ${t}`).run(); } catch {}
+      }
+      // Users: delete all except none — full replace (fixed admins re-seeded
+      // on next boot if missing, but restore brings them back with their rows).
+      try { db.prepare('DELETE FROM users').run(); } catch {}
+      const insert = (t, row) => {
+        const cols = Object.keys(row);
+        if (!cols.length) return;
+        const ph = cols.map(() => '?').join(',');
+        db.prepare(`INSERT OR REPLACE INTO ${t} (${cols.join(',')}) VALUES (${ph})`).run(...cols.map(c => row[c]));
+      };
+      for (const u of tables.users || []) insert('users', u);
+      for (const r of tables.rooms || []) insert('rooms', r);
+      for (const vc of tables.voice_channels || []) insert('voice_channels', vc);
+      for (const m of tables.room_members || []) insert('room_members', m);
+      for (const f of tables.files || []) insert('files', f);
+      for (const m of tables.messages || []) insert('messages', m);
+      for (const r of tables.reactions || []) insert('reactions', r);
+      for (const r of tables.reports || []) insert('reports', r);
+      for (const r of tables.room_reads || []) insert('room_reads', r);
+    });
+    txn();
+    const counts = {};
+    for (const t of BACKUP_TABLES) counts[t] = (backup.tables[t] || []).length;
+    res.json({ success: true, restored: counts });
+  } catch (err) {
+    console.error('Restore error:', err);
+    res.status(500).json({ error: 'Restore failed: ' + err.message });
+  }
+});
 // --- Reports moderation ---
 // GET /api/admin/reports
 router.get('/reports', (req, res) => {
