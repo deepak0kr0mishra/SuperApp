@@ -3,6 +3,13 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { userQueries, roomQueries, generateUserCode } from './db.js';
+import { generateUID } from './db.js';
+import {
+  authLimiter,
+  validateUsername,
+  validateEmail,
+  validatePassword,
+} from './security.js';
 
 const router = express.Router();
 
@@ -13,40 +20,57 @@ const AVATAR_COLORS = [
 
 const randomColor = () => AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 
-// POST /api/auth/register
-router.post('/register', async (req, res) => {
+function signToken(user) {
+  return jwt.sign(
+    { userId: user.id ?? user.userId, username: user.username },
+    process.env.JWT_SECRET || 'securechat_secret_key_change_in_prod',
+    { expiresIn: '30d' }
+  );
+}
+
+// POST /api/auth/register — { username, email, password, display_name? }
+// Every account receives a permanent 8-char UID (uid) that never changes.
+router.post('/register', authLimiter, async (req, res) => {
   try {
-    const { username, display_name, password } = req.body;
+    const { username, email, display_name, password } = req.body;
 
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
-    }
-    if (username.length < 3 || username.length > 20) {
-      return res.status(400).json({ error: 'Username must be 3-20 characters' });
-    }
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters' });
-    }
-    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
-      return res.status(400).json({ error: 'Username can only contain letters, numbers and underscores' });
-    }
+    const uErr = validateUsername(username);
+    if (uErr) return res.status(400).json({ error: uErr });
+    const eErr = validateEmail(email);
+    if (eErr) return res.status(400).json({ error: eErr });
+    const pErr = validatePassword(password);
+    if (pErr) return res.status(400).json({ error: pErr });
 
-    const existing = userQueries.findByUsername.get(username);
-    if (existing) {
+    const cleanEmail = String(email).trim().toLowerCase();
+
+    if (userQueries.findByUsername.get(username)) {
       return res.status(409).json({ error: 'Username already taken' });
+    }
+    if (userQueries.findByEmail.get(cleanEmail)) {
+      return res.status(409).json({ error: 'Email already registered' });
     }
 
     const password_hash = await bcrypt.hash(password, 12);
     const id = uuidv4();
-    const displayName = display_name?.trim() || username;
+    const displayName = (display_name?.trim() || username).slice(0, 40);
 
-    // Generate unique 6-char user code
+    // Generate unique 6-char legacy code + permanent 8-char UID
     let user_code = null;
     for (let i = 0; i < 10; i++) {
       const candidate = generateUserCode();
       if (!userQueries.findByCode.get(candidate)) { user_code = candidate; break; }
     }
     if (!user_code) user_code = generateUserCode() + Date.now().toString(36).slice(-2).toUpperCase();
+
+    let uid = null;
+    for (let i = 0; i < 20; i++) {
+      const candidate = generateUID();
+      try {
+        const hit = userQueries.findByUid.get(candidate);
+        if (!hit) { uid = candidate; break; }
+      } catch { uid = candidate; break; }
+    }
+    if (!uid) uid = generateUID();
 
     // First real user becomes admin
     let role = 'user';
@@ -57,7 +81,9 @@ router.post('/register', async (req, res) => {
 
     userQueries.create.run({
       id,
+      uid,
       username,
+      email: cleanEmail,
       display_name: displayName,
       password_hash,
       avatar_color: randomColor(),
@@ -74,10 +100,7 @@ router.post('/register', async (req, res) => {
       }
     }
 
-    const token = jwt.sign({ userId: id, username }, process.env.JWT_SECRET || 'securechat_secret_key_change_in_prod', {
-      expiresIn: '30d',
-    });
-
+    const token = signToken({ id, username });
     const user = userQueries.findById.get(id);
     res.status(201).json({ token, user });
   } catch (err) {
@@ -86,18 +109,27 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// POST /api/auth/login
-router.post('/login', async (req, res) => {
+// POST /api/auth/login — { login (username or email), password } + legacy { username, password }
+router.post('/login', authLimiter, async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const loginId = (req.body.login || req.body.username || req.body.email || '').trim();
+    const { password } = req.body;
 
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
+    if (!loginId || !password) {
+      return res.status(400).json({ error: 'Username/email and password are required' });
     }
 
-    const userRecord = userQueries.findByUsername.get(username);
+    const lowered = loginId.toLowerCase();
+    const userRecord =
+      userQueries.findByUsername.get(loginId) ||
+      userQueries.findByEmail.get(lowered) ||
+      userQueries.findByLogin.get(loginId, lowered);
+
     if (!userRecord) {
       return res.status(401).json({ error: 'Invalid username or password' });
+    }
+    if (userRecord.is_disabled) {
+      return res.status(403).json({ error: 'Account has been disabled. Contact an admin.' });
     }
 
     const valid = await bcrypt.compare(password, userRecord.password_hash);
@@ -105,12 +137,7 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
-    const token = jwt.sign(
-      { userId: userRecord.id, username: userRecord.username },
-      process.env.JWT_SECRET || 'securechat_secret_key_change_in_prod',
-      { expiresIn: '30d' }
-    );
-
+    const token = signToken({ id: userRecord.id, username: userRecord.username });
     const user = userQueries.findById.get(userRecord.id);
     res.json({ token, user });
   } catch (err) {
@@ -119,15 +146,20 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// POST /api/auth/logout — stateless JWT; client drops token. Presence handled via socket disconnect.
+router.post('/logout', authenticateToken, (req, res) => {
+  res.json({ success: true });
+});
+
 // GET /api/auth/me
 router.get('/me', authenticateToken, (req, res) => {
   const user = userQueries.findById.get(req.user.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
+  if (user.is_disabled) return res.status(403).json({ error: 'Account disabled' });
   res.json({ user });
 });
 
 // PUT /api/auth/public-key — legacy E2E endpoint, now a no-op.
-// Kept so old clients don't break; encryption has been removed.
 router.put('/public-key', authenticateToken, (req, res) => {
   res.json({ success: true });
 });
@@ -148,14 +180,21 @@ router.put('/profile', authenticateToken, async (req, res) => {
       bio === undefined ? null : bio,
       req.user.userId
     );
-    // Ensure code exists for legacy users hitting this endpoint
+    // Ensure code/uid exist for legacy users hitting this endpoint
     let user = userQueries.findById.get(req.user.userId);
-    if (!user.user_code) {
-      let code = generateUserCode();
-      for (let i = 0; i < 10 && userQueries.findByCode.get(code); i++) code = generateUserCode();
+    if (!user.user_code || !user.uid) {
       try {
         const db = (await import('./db.js')).default;
-        db.prepare('UPDATE users SET user_code = ? WHERE id = ?').run(code, req.user.userId);
+        if (!user.user_code) {
+          let code = generateUserCode();
+          for (let i = 0; i < 10 && userQueries.findByCode.get(code); i++) code = generateUserCode();
+          db.prepare('UPDATE users SET user_code = ? WHERE id = ?').run(code, req.user.userId);
+        }
+        if (!user.uid) {
+          let uid = generateUID();
+          for (let i = 0; i < 10 && userQueries.findByUid.get(uid); i++) uid = generateUID();
+          db.prepare('UPDATE users SET uid = ? WHERE id = ?').run(uid, req.user.userId);
+        }
         user = userQueries.findById.get(req.user.userId);
       } catch {}
     }
@@ -174,6 +213,11 @@ export function authenticateToken(req, res, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET || 'securechat_secret_key_change_in_prod');
     req.user = payload;
+    // Reject disabled accounts on every authenticated request
+    try {
+      const raw = userQueries.findRawById.get(payload.userId);
+      if (raw?.is_disabled) return res.status(403).json({ error: 'Account disabled' });
+    } catch {}
     next();
   } catch {
     res.status(403).json({ error: 'Invalid or expired token' });

@@ -68,6 +68,12 @@ router.post('/upload', authenticateToken, upload.single('file'), (req, res) => {
 
     const room = roomQueries.findById.get(roomId);
     if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (room.type === 'dm') {
+      const member = roomQueries.isMember.get(roomId, req.user.userId);
+      if (!member) return res.status(403).json({ error: 'You are not part of this conversation' });
+    } else {
+      try { roomQueries.addMember.run(roomId, req.user.userId); } catch {}
+    }
 
     const id = uuidv4();
     fileQueries.insert.run({

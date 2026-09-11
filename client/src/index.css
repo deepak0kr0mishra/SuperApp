@@ -1620,6 +1620,9 @@ audio::-webkit-media-controls-panel { background: var(--bg-elevated); }
 .reply-quote-name { font-weight: 700; color: var(--brand-primary); font-size: 11.5px; }
 .reply-quote-text { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message-text.legacy { color: var(--text-muted); font-style: italic; }
+.message-text.deleted { color: var(--text-muted); font-style: italic; }
+.edit-box { margin-top: 4px; }
+.edit-box .form-input { width: 100%; resize: vertical; }
 .legacy-note { font-size: 12px; }
 .empty-note { color: var(--text-muted); font-style: italic; }
 .message-sender { background: none; border: none; cursor: pointer; font: inherit; padding: 0; }

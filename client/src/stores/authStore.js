@@ -28,10 +28,10 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
-  register: async (username, displayName, password) => {
+  register: async (username, displayName, password, email) => {
     set({ error: null });
     try {
-      const { token, user } = await api.register(username, displayName, password);
+      const { token, user } = await api.register(username, displayName, password, email);
       localStorage.setItem('sc_token', token);
       const socket = createSocket(token);
       set({ user, token, keyPair: null });
@@ -42,10 +42,10 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
-  login: async (username, password) => {
+  login: async (login, password) => {
     set({ error: null });
     try {
-      const { token, user } = await api.login(username, password);
+      const { token, user } = await api.login(login, password);
       localStorage.setItem('sc_token', token);
       const socket = createSocket(token);
       set({ user, token, keyPair: null });
@@ -57,6 +57,7 @@ export const useAuthStore = create((set, get) => ({
   },
 
   logout: () => {
+    try { api.logout?.().catch(() => {}); } catch {}
     localStorage.removeItem('sc_token');
     disconnectSocket();
     set({ user: null, token: null, keyPair: null });

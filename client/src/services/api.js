@@ -53,10 +53,11 @@ if (typeof window !== 'undefined' && !LIVE_BACKEND_CONFIGURED) {
 
 export const api = {
   // Auth
-  register: (username, displayName, password) =>
-    request('POST', '/auth/register', { username, display_name: displayName, password }),
-  login: (username, password) =>
-    request('POST', '/auth/login', { username, password }),
+  register: (username, displayName, password, email) =>
+    request('POST', '/auth/register', { username, display_name: displayName, password, email }),
+  login: (login, password) =>
+    request('POST', '/auth/login', { login, username: login, password }),
+  logout: () => request('POST', '/auth/logout'),
   me: () => request('GET', '/auth/me'),
   uploadPublicKey: (publicKey) =>
     request('PUT', '/auth/public-key', { publicKey: JSON.stringify(publicKey) }),
@@ -70,22 +71,46 @@ export const api = {
 
   // Admin
   adminStats: () => request('GET', '/admin/stats'),
-  adminGetUsers: () => request('GET', '/admin/users'),
+  adminGetUsers: (q) => request('GET', q ? `/admin/users?q=${encodeURIComponent(q)}` : '/admin/users'),
   adminSetRole: (id, role) => request('PUT', `/admin/users/${id}/role`, { role }),
+  adminPatchUser: (id, patch) => request('PATCH', `/admin/users/${id}`, patch),
+  adminDisableUser: (id) => request('POST', `/admin/users/${id}/disable`),
+  adminEnableUser: (id) => request('POST', `/admin/users/${id}/enable`),
   adminDeleteUser: (id) => request('DELETE', `/admin/users/${id}`),
   adminGetRooms: () => request('GET', '/admin/rooms'),
+  adminCreateRoom: (name, description) => request('POST', '/admin/rooms', { name, description }),
+  adminRenameRoom: (id, patch) => request('PATCH', `/admin/rooms/${id}`, patch),
   adminDeleteRoom: (id) => request('DELETE', `/admin/rooms/${id}`),
-  adminRecentMessages: () => request('GET', '/admin/messages/recent'),
+  adminRecentMessages: (q) => request('GET', q ? `/admin/messages/recent?q=${encodeURIComponent(q)}` : '/admin/messages/recent'),
   adminDeleteMessage: (id) => request('DELETE', `/admin/messages/${id}`),
+  adminGetReports: () => request('GET', '/admin/reports'),
+  adminResolveReport: (id, action) => request('POST', `/admin/reports/${id}`, { action }),
+  adminGetVoice: () => request('GET', '/admin/voice'),
+  adminCreateVoice: (name, description) => request('POST', '/admin/voice', { name, description }),
+  adminRenameVoice: (id, patch) => request('PATCH', `/admin/voice/${id}`, patch),
+  adminDeleteVoice: (id) => request('DELETE', `/admin/voice/${id}`),
 
   // Rooms
   getRooms: () => request('GET', '/rooms'),
   getMembers: (roomId) => request('GET', `/rooms/${roomId}/members`),
+  getMessages: (roomId, { before = 0, limit = 50 } = {}) =>
+    request('GET', `/rooms/${roomId}/messages?before=${before}&limit=${limit}`),
+  markRead: (roomId) => request('POST', `/rooms/${roomId}/read`),
   createRoom: (name, description, type) =>
     request('POST', '/rooms', { name, description, type }),
   joinRoom: (roomId) => request('POST', `/rooms/${roomId}/join`),
   leaveRoom: (roomId) => request('DELETE', `/rooms/${roomId}/leave`),
   createDM: (targetUserId) => request('POST', '/rooms/dm', { targetUserId }),
+
+  // Messages (REST mirror of socket events)
+  editMessage: (id, content) => request('PATCH', `/messages/${id}`, { content }),
+  deleteMessage: (id) => request('DELETE', `/messages/${id}`),
+
+  // Reports
+  report: (payload) => request('POST', '/reports', payload),
+
+  // Voice channels (persistent list)
+  getVoiceChannels: () => request('GET', '/voice'),
 
   // Files
   uploadFile: async (file, roomId, onProgress) => {

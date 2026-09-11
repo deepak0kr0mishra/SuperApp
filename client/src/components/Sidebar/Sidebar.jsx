@@ -5,9 +5,9 @@ import { useVoiceStore } from '../../stores/voiceStore.js';
 import { Avatar } from '../shared/Avatar.jsx';
 
 export const VOICE_CHANNELS = [
-  { id: 'vc-general', name: 'Nebula Lounge', emoji: '🌌' },
-  { id: 'vc-gaming', name: 'Gaming Orbit', emoji: '🎮' },
-  { id: 'vc-music', name: 'Music Comet', emoji: '🎧' },
+  { id: 'voice-general', name: 'General', emoji: '🔊' },
+  { id: 'voice-gaming', name: 'Gaming', emoji: '🔊' },
+  { id: 'voice-study', name: 'Study Room', emoji: '🔊' },
 ];
 
 const CHANNEL_ICONS = {
@@ -33,7 +33,7 @@ function previewOf(msg) {
 
 export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM, onOpenSearch, onOpenProfile, onOpenAdmin, onRoomSelect }) {
   const { user, logout } = useAuthStore();
-  const { rooms, activeRoomId, unread, allUsers, userStatuses, members, messages } = useChatStore();
+  const { rooms, activeRoomId, unread, allUsers, userStatuses, members, messages, voiceChannels } = useChatStore();
   const { currentChannelId, voiceChannelMembers, speakingUsers, joinVoiceChannel, leaveVoiceChannel, isMuted, toggleMute } = useVoiceStore();
   const [filter, setFilter] = useState('');
 
@@ -74,7 +74,9 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
         const name = (peer?.display_name || peer?.username || room.name || '').toLowerCase();
         const uname = (peer?.username || '').toLowerCase();
         const code = (peer?.user_code || '').toLowerCase();
-        return name.includes(q) || uname.includes(q) || code.includes(q);
+        const uid = (peer?.uid || '').toLowerCase();
+        const email = (peer?.email || '').toLowerCase();
+        return name.includes(q) || uname.includes(q) || code.includes(q) || uid.includes(q) || email.includes(q);
       })
     : dms;
 
@@ -168,8 +170,8 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
             })}
 
             {/* Voice stays reachable but collapsed under chats */}
-            <div className="sidebar-section-title" style={{ marginTop: 12 }}><span>🔊 Voice orbit</span></div>
-            {VOICE_CHANNELS.map(vc => {
+            <div className="sidebar-section-title" style={{ marginTop: 12 }}><span>🔊 Voice</span></div>
+            {(voiceChannels?.length ? voiceChannels : VOICE_CHANNELS).map(vc => {
               const vmembers = voiceChannelMembers[vc.id] || [];
               const inChannel = currentChannelId === vc.id;
               return (
@@ -215,7 +217,7 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
         <div className="sidebar-user-info" onClick={onOpenProfile} style={{ cursor: 'pointer' }} title="Open profile">
           <div className="sidebar-user-name">{user?.display_name || user?.username}</div>
           <div className="sidebar-user-status">
-            Online {user?.user_code ? <span className="code-chip small">#{user.user_code}</span> : null} {isAdmin ? <span className="admin-chip">ADMIN</span> : null}
+            Online {user?.uid ? <span className="code-chip small">UID {user.uid}</span> : user?.user_code ? <span className="code-chip small">#{user.user_code}</span> : null} {isAdmin ? <span className="admin-chip">ADMIN</span> : null}
           </div>
         </div>
         {isAdmin && (

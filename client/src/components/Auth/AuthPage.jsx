@@ -4,6 +4,7 @@ import { useAuthStore } from '../../stores/authStore.js';
 export default function AuthPage() {
   const [tab, setTab] = useState('login');
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -16,9 +17,9 @@ export default function AuthPage() {
     setLoading(true);
     try {
       if (tab === 'login') {
-        await login(username, password);
+        await login(username.trim(), password);
       } else {
-        await register(username, displayName, password);
+        await register(username.trim(), displayName, password, email.trim());
       }
     } catch {
       // error handled in store
@@ -70,12 +71,14 @@ export default function AuthPage() {
 
         <form onSubmit={handleSubmit} autoComplete="off">
           <div className="form-group">
-            <label className="form-label" htmlFor="auth-username">Username</label>
+            <label className="form-label" htmlFor="auth-username">
+              {tab === 'login' ? 'Username or email' : 'Username'}
+            </label>
             <input
               id="auth-username"
               type="text"
               className="form-input"
-              placeholder="e.g. john_doe"
+              placeholder={tab === 'login' ? 'e.g. john_doe or john@mail.com' : 'e.g. john_doe'}
               value={username}
               onChange={e => setUsername(e.target.value)}
               autoFocus
@@ -84,17 +87,31 @@ export default function AuthPage() {
           </div>
 
           {tab === 'register' && (
-            <div className="form-group">
-              <label className="form-label" htmlFor="auth-display-name">Display Name</label>
-              <input
-                id="auth-display-name"
-                type="text"
-                className="form-input"
-                placeholder="How you appear in chat"
-                value={displayName}
-                onChange={e => setDisplayName(e.target.value)}
-              />
-            </div>
+            <>
+              <div className="form-group">
+                <label className="form-label" htmlFor="auth-email">Email</label>
+                <input
+                  id="auth-email"
+                  type="email"
+                  className="form-input"
+                  placeholder="you@mail.com"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="auth-display-name">Display Name</label>
+                <input
+                  id="auth-display-name"
+                  type="text"
+                  className="form-input"
+                  placeholder="How you appear in chat"
+                  value={displayName}
+                  onChange={e => setDisplayName(e.target.value)}
+                />
+              </div>
+            </>
           )}
 
           <div className="form-group">
@@ -127,12 +144,18 @@ export default function AuthPage() {
           </button>
         </form>
 
+        {tab === 'register' && (
+          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            You get a permanent UID (e.g. 8F42K9X1) that never changes — even if you rename yourself.
+          </div>
+        )}
+
         <div style={{ marginTop: 20, padding: '12px 14px', background: 'rgba(34,211,238,0.06)', border: '1px solid rgba(34,211,238,0.15)', borderRadius: 10 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#22d3ee', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>
             ⚡ Fast & Simple Chat
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            Instant messages, photos, videos & voice notes. Find anyone with their unique #code.
+            Instant messages, photos, videos & voice notes. Find anyone with their unique UID or username.
           </div>
         </div>
       </div>

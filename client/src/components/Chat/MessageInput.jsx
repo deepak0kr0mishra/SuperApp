@@ -291,7 +291,7 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
             onKeyDown={handleKeyDown}
             rows={1}
             disabled={uploading}
-            maxLength={4000}
+            maxLength={2000}
           />
           <div className="input-actions">
             <div style={{ position: 'relative' }} ref={emojiRef}>

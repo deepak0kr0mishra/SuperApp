@@ -35,12 +35,13 @@ function DateDivider({ date }) {
   return <div className="date-divider">{label}</div>;
 }
 
-function MessageActions({ message, roomId, onReply }) {
+function MessageActions({ message, roomId, onReply, onEdit, onReport }) {
   const { user } = useAuthStore();
   const socket = getSocket();
+  const deleted = !!message.is_deleted;
   return (
     <div className="message-actions">
-      {QUICK_REACTIONS.map(emoji => (
+      {!deleted && QUICK_REACTIONS.map(emoji => (
         <button
           key={emoji}
           className="input-action-btn"
@@ -51,7 +52,15 @@ function MessageActions({ message, roomId, onReply }) {
           {emoji}
         </button>
       ))}
-      <button className="input-action-btn" onClick={() => onReply(message)} title="Reply" style={{ fontSize: 14 }}>↩</button>
+      {!deleted && (
+        <button className="input-action-btn" onClick={() => onReply(message)} title="Reply" style={{ fontSize: 14 }}>↩</button>
+      )}
+      {!deleted && message.sender_id === user?.id && message.type === 'text' && (
+        <button className="input-action-btn" onClick={() => onEdit(message)} title="Edit" style={{ fontSize: 14 }}>✎</button>
+      )}
+      {!deleted && message.sender_id !== user?.id && (
+        <button className="input-action-btn" onClick={() => onReport(message)} title="Report" style={{ fontSize: 14 }}>⚑</button>
+      )}
       {(message.sender_id === user?.id || user?.role === 'admin') && (
         <button
           className="input-action-btn"
@@ -87,6 +96,10 @@ function MessageContent({ message }) {
   const [lightbox, setLightbox] = useState(false);
   const [mediaError, setMediaError] = useState(false);
   const text = messageText(message);
+
+  if (message.is_deleted) {
+    return <div className="message-text deleted">This message was deleted.</div>;
+  }
 
   // --- Image: direct <img> with auth token (no fetch/decrypt) ---
   if (message.type === 'image' && message.file_id) {
@@ -200,19 +213,58 @@ function MessageContent({ message }) {
   return <div className="message-text">{text || <span className="empty-note">[empty]</span>}</div>;
 }
 
-// --- Full Message List ---
+// --- Full Message List (paginated, infinite scroll up) ---
 export default function MessageList({ roomId, onReply, onOpenProfile }) {
-  const { messages } = useChatStore();
+  const { messages, hasMore, loadingOlder } = useChatStore();
   const { user } = useAuthStore();
   const listRef = useRef(null);
   const stickRef = useRef(true);
   const roomMessages = messages[roomId] || [];
   const socket = getSocket();
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [reportMsg, setReportMsg] = useState(null);
+  const [reportReason, setReportReason] = useState('');
+  const [reportState, setReportState] = useState('');
+
+  // Mark room as read whenever the visible history changes while focused.
+  useEffect(() => {
+    if (!roomId || roomMessages.length === 0) return;
+    const t = setTimeout(() => {
+      api.markRead(roomId).catch(() => {});
+      getSocket()?.emit('message:read', { roomId });
+      useChatStore.getState().clearUnread(roomId);
+    }, 800);
+    return () => clearTimeout(t);
+  }, [roomId, roomMessages.length]);
+
+  const loadOlder = async () => {
+    const state = useChatStore.getState();
+    if (state.loadingOlder[roomId] || !state.hasMore[roomId]) return;
+    const msgs = state.messages[roomId] || [];
+    if (msgs.length === 0) return;
+    const oldest = msgs[0].created_at;
+    state.setLoadingOlder(roomId, true);
+    const el = listRef.current;
+    const prevHeight = el ? el.scrollHeight : 0;
+    try {
+      const { messages: older, hasMore: more } = await api.getMessages(roomId, { before: oldest, limit: 50 });
+      state.prependMessages(roomId, older || []);
+      if (more === false) useChatStore.setState(s => ({ hasMore: { ...s.hasMore, [roomId]: false } }));
+      requestAnimationFrame(() => {
+        if (el) el.scrollTop = el.scrollHeight - prevHeight;
+      });
+    } catch (err) {
+      console.error('Load older failed:', err);
+      state.setLoadingOlder(roomId, false);
+    }
+  };
 
   const handleScroll = () => {
     const el = listRef.current;
     if (!el) return;
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (el.scrollTop < 120) loadOlder();
   };
 
   useEffect(() => {
@@ -225,6 +277,40 @@ export default function MessageList({ roomId, onReply, onOpenProfile }) {
     stickRef.current = true;
     if (listRef.current) listRef.current.scrollTop = listRef.current?.scrollHeight || 0;
   }, [roomId]);
+
+  const startEdit = (msg) => {
+    setEditingId(msg.id);
+    setEditText(messageText(msg));
+  };
+
+  const submitEdit = async () => {
+    const text = editText.trim();
+    if (!text) return;
+    const id = editingId;
+    setEditingId(null);
+    try {
+      getSocket()?.emit('message:edit', { messageId: id, content: text.slice(0, 2000) });
+    } catch (err) {
+      console.error('Edit failed:', err);
+    }
+  };
+
+  const submitReport = async (e) => {
+    e?.preventDefault();
+    if (!reportMsg || !reportReason.trim()) return;
+    setReportState('sending');
+    try {
+      await api.report({
+        messageId: reportMsg.id,
+        targetUserId: reportMsg.sender_id,
+        reason: reportReason.trim().slice(0, 500),
+      });
+      setReportState('sent');
+      setTimeout(() => { setReportMsg(null); setReportReason(''); setReportState(''); }, 1500);
+    } catch (err) {
+      setReportState(err.message || 'Failed');
+    }
+  };
 
   const processedMessages = useMemo(() => {
     let lastDate = null;
@@ -251,8 +337,10 @@ export default function MessageList({ roomId, onReply, onOpenProfile }) {
 
   return (
     <div className="message-list" ref={listRef} onScroll={handleScroll}>
+      {loadingOlder[roomId] && <div className="date-divider">Loading older messages…</div>}
       {processedMessages.map((msg) => {
         const mine = msg.sender_id === user?.id;
+        const edited = !!(msg.edited_at || msg.updated_at);
         return (
           <React.Fragment key={msg.id}>
             {msg.showDate && <DateDivider date={msg.created_at} />}
@@ -271,11 +359,35 @@ export default function MessageList({ roomId, onReply, onOpenProfile }) {
                     <button className="message-sender" style={{ color: msg.avatar_color }} onClick={() => onOpenProfile?.(msg.sender_id)}>
                       {msg.display_name || msg.username}
                     </button>
-                    <span className="message-time">{format(new Date(msg.created_at * 1000), 'h:mm a')}</span>
+                    <span className="message-time">
+                      {format(new Date(msg.created_at * 1000), 'h:mm a')}
+                      {edited && !msg.is_deleted ? ' • edited' : ''}
+                    </span>
                   </div>
                 )}
                 {msg.reply_to && <ReplyQuote replyId={msg.reply_to} roomId={roomId} />}
-                <MessageContent message={msg} />
+                {editingId === msg.id ? (
+                  <div className="edit-box">
+                    <textarea
+                      className="form-input"
+                      value={editText}
+                      onChange={e => setEditText(e.target.value)}
+                      maxLength={2000}
+                      rows={2}
+                      autoFocus
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitEdit(); }
+                        if (e.key === 'Escape') setEditingId(null);
+                      }}
+                    />
+                    <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                      <button className="btn-mini primary" onClick={submitEdit}>Save</button>
+                      <button className="btn-mini" onClick={() => setEditingId(null)}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <MessageContent message={msg} />
+                )}
                 {msg.reactions && msg.reactions.length > 0 && (
                   <div className="message-reactions">
                     {msg.reactions.map(r => {
@@ -297,11 +409,45 @@ export default function MessageList({ roomId, onReply, onOpenProfile }) {
                   </div>
                 )}
               </div>
-              <MessageActions message={msg} roomId={roomId} onReply={onReply} />
+              <MessageActions message={msg} roomId={roomId} onReply={onReply} onEdit={startEdit} onReport={setReportMsg} />
             </div>
           </React.Fragment>
         );
       })}
+
+      {reportMsg && (
+        <div className="modal-overlay" onClick={() => setReportMsg(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">⚑ Report message</div>
+              <button className="icon-btn" onClick={() => setReportMsg(null)}>✕</button>
+            </div>
+            <form onSubmit={submitReport}>
+              <div className="form-group">
+                <label className="form-label" htmlFor="report-reason">Why are you reporting this?</label>
+                <textarea
+                  id="report-reason"
+                  className="form-input"
+                  value={reportReason}
+                  onChange={e => setReportReason(e.target.value)}
+                  maxLength={500}
+                  rows={3}
+                  placeholder="e.g. spam, harassment…"
+                  required
+                />
+              </div>
+              {reportState === 'sent'
+                ? <div className="profile-msg">Report sent — thanks ✦</div>
+                : reportState && reportState !== 'sending'
+                  ? <div className="form-error">{reportState}</div>
+                  : null}
+              <button className="btn-primary" type="submit" disabled={!reportReason.trim() || reportState === 'sending'}>
+                {reportState === 'sending' ? 'Sending…' : 'Send report'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

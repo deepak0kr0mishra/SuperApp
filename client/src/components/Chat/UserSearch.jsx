@@ -55,15 +55,17 @@ export default function UserSearch({ onClose, onOpenDM }) {
     const hashIdx = qLower.indexOf('#');
     if (hashIdx >= 0) {
       const namePart = qLower.slice(0, hashIdx);
-      const codePart = qLower.slice(hashIdx + 1);
+      const codePart = qLower.slice(hashIdx + 1).toUpperCase();
       const nameOk = !namePart || u.username.toLowerCase().includes(namePart) || (u.display_name || '').toLowerCase().includes(namePart);
-      const codeOk = !codePart || (u.user_code || '').toLowerCase().includes(codePart);
+      const codeOk = !codePart || (u.user_code || '').toUpperCase().includes(codePart) || (u.uid || '').toUpperCase().includes(codePart);
       return nameOk && codeOk;
     }
     return (
       u.username.toLowerCase().includes(qLower) ||
       (u.display_name || '').toLowerCase().includes(qLower) ||
-      (u.user_code || '').toLowerCase().includes(qLower.replace('#', ''))
+      (u.user_code || '').toLowerCase().includes(qLower.replace('#', '')) ||
+      (u.uid || '').toLowerCase().includes(qLower) ||
+      (u.email || '').toLowerCase().includes(qLower)
     );
   });
 
@@ -98,12 +100,12 @@ export default function UserSearch({ onClose, onOpenDM }) {
         <input
           id="user-search-input"
           className="form-input"
-          placeholder="Search name, @username, or #code…"
+          placeholder="Search name, @username, UID, or email…"
           value={search}
           onChange={e => setSearch(e.target.value)}
           autoFocus
         />
-        <div className="search-tip">Tap anyone to open a 1:1 chat. Share <b>{user?.username}#{user?.user_code}</b> to be found.</div>
+        <div className="search-tip">Tap anyone to open a 1:1 chat. Share your UID <b>{user?.uid || user?.user_code}</b> to be found.</div>
         {error && <div className="form-error" style={{ marginTop: 10 }}>{error}</div>}
         <div className="search-list">
           {filtered.length === 0 ? (
@@ -121,7 +123,7 @@ export default function UserSearch({ onClose, onOpenDM }) {
                 <span className="search-row-text">
                   <span className="search-row-name">
                     {u.display_name || u.username}
-                    {u.user_code && <span className="code-chip">#{u.user_code}</span>}
+                    {(u.uid || u.user_code) && <span className="code-chip">{u.uid || `#${u.user_code}`}</span>}
                   </span>
                   <span className="search-row-sub">@{u.username}{u.bio ? ` • ${u.bio.slice(0, 40)}` : ''}</span>
                 </span>

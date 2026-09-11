@@ -156,11 +156,30 @@ export default function ChatPage() {
     }).catch(err => console.error('getRooms failed:', err));
     api.getAllUsers().then(({ users }) => { if (!cancelled) setAllUsers(users); })
       .catch(err => console.error('getAllUsers failed:', err));
+    api.getVoiceChannels().then(({ channels }) => {
+      if (!cancelled) useChatStore.getState().setVoiceChannels(channels || []);
+    }).catch(() => {});
 
     const onHistory = ({ roomId, messages }) => {
       useChatStore.getState().setMessages(roomId, messages);
+      // History viewed → mark read.
+      api.markRead(roomId).catch(() => {});
+      getSocket()?.emit('message:read', { roomId });
+      useChatStore.getState().clearUnread(roomId);
     };
-    const onNew = (message) => useChatStore.getState().appendMessage(message);
+    const onNew = (message) => {
+      useChatStore.getState().appendMessage(message);
+      const active = useChatStore.getState().activeRoomId;
+      if (message.room_id === active) {
+        api.markRead(message.room_id).catch(() => {});
+        getSocket()?.emit('message:read', { roomId: message.room_id });
+        useChatStore.getState().clearUnread(message.room_id);
+      }
+    };
+    const onEdited = (message) => useChatStore.getState().updateMessage(message);
+    const onRead = ({ roomId }) => {
+      // Peer read the room — nothing to change locally for now (placeholder for ✓✓).
+    };
     const onDeleted = ({ messageId, roomId }) => useChatStore.getState().deleteMessage(messageId, roomId);
     const onReactions = ({ messageId, reactions }) => useChatStore.getState().updateReactions(messageId, reactions);
     const onTyping = ({ userId, username, roomId, typing }) => useChatStore.getState().setTyping(roomId, userId, username, typing);
@@ -169,6 +188,9 @@ export default function ChatPage() {
       const users = useChatStore.getState().allUsers.map(u => u.id === userId ? { ...u, status } : u);
       useChatStore.getState().setAllUsers(users);
     };
+    // Granular presence events (server also sends user:status for compat)
+    const onOnline = ({ userId }) => onStatus({ userId, status: 'online' });
+    const onOffline = ({ userId }) => onStatus({ userId, status: 'offline' });
     const onRoomNew = (room) => useChatStore.getState().addRoom(room);
     const onVoiceInit = (state) => useVoiceStore.getState().setAllVoiceState(state);
     const onVoiceState = ({ channelId, members }) => useVoiceStore.getState().setVoiceChannelMembers(channelId, members);
@@ -176,10 +198,16 @@ export default function ChatPage() {
 
     socket.on('messages:history', onHistory);
     socket.on('message:new', onNew);
+    socket.on('message:edited', onEdited);
+    socket.on('message:read', onRead);
     socket.on('message:deleted', onDeleted);
     socket.on('message:reactions_update', onReactions);
     socket.on('typing:update', onTyping);
+    socket.on('typing:start', ({ userId, username, roomId }) => useChatStore.getState().setTyping(roomId, userId, username, true));
+    socket.on('typing:stop', ({ userId, roomId }) => useChatStore.getState().setTyping(roomId, userId, '', false));
     socket.on('user:status', onStatus);
+    socket.on('user:online', onOnline);
+    socket.on('user:offline', onOffline);
     socket.on('room:new', onRoomNew);
     socket.on('voice:initial_state', onVoiceInit);
     socket.on('voice:channel_state', onVoiceState);
@@ -189,10 +217,14 @@ export default function ChatPage() {
       cancelled = true;
       socket.off('messages:history', onHistory);
       socket.off('message:new', onNew);
+      socket.off('message:edited', onEdited);
+      socket.off('message:read', onRead);
       socket.off('message:deleted', onDeleted);
       socket.off('message:reactions_update', onReactions);
       socket.off('typing:update', onTyping);
       socket.off('user:status', onStatus);
+      socket.off('user:online', onOnline);
+      socket.off('user:offline', onOffline);
       socket.off('room:new', onRoomNew);
       socket.off('voice:initial_state', onVoiceInit);
       socket.off('voice:channel_state', onVoiceState);
@@ -207,6 +239,8 @@ export default function ChatPage() {
     await joinRoomAndFetchMembers(socket, roomId, setMembers, prevRoomId.current);
     setActiveRoom(roomId);
     prevRoomId.current = roomId;
+    api.markRead(roomId).catch(() => {});
+    socket?.emit('message:read', { roomId });
     if (isNarrowScreen()) setSidebarOpen(false);
   };
 

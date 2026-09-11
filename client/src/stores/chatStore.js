@@ -22,14 +22,26 @@ export function isLegacyEncryptedBlob(text) {
 export const useChatStore = create((set, get) => ({
   rooms: [],
   activeRoomId: null,
-  messages: {},       // roomId → message[]
+  messages: {},       // roomId → message[] (oldest-first)
+  hasMore: {},        // roomId → bool (older pages available)
+  loadingOlder: {},   // roomId → bool
   members: {},        // roomId → member[]
   typingUsers: {},    // roomId → { userId: username }
   userStatuses: {},   // userId → 'online' | 'offline'
   unread: {},         // roomId → count
   allUsers: [],
+  voiceChannels: [],
 
-  setRooms: (rooms) => set({ rooms }),
+  setRooms: (rooms) => set((state) => {
+    // Preserve server-provided unread counts for rooms we haven't loaded yet.
+    const unread = { ...state.unread };
+    for (const r of rooms || []) {
+      if (typeof r.unread === 'number' && unread[r.id] === undefined) unread[r.id] = r.unread;
+    }
+    return { rooms, unread };
+  }),
+
+  setVoiceChannels: (channels) => set({ voiceChannels: channels || [] }),
 
   setAllUsers: (users) => set({ allUsers: users }),
 
@@ -52,7 +64,44 @@ export const useChatStore = create((set, get) => ({
       content: messageText(m),
       reactions: m.reactions || [],
     }));
-    return { messages: { ...state.messages, [roomId]: normalized } };
+    return {
+      messages: { ...state.messages, [roomId]: normalized },
+      hasMore: { ...state.hasMore, [roomId]: (messages || []).length >= 50 },
+    };
+  }),
+
+  // Prepend an older page (infinite scroll up). De-dupes by id.
+  prependMessages: (roomId, older) => set(state => {
+    const existing = state.messages[roomId] || [];
+    const ids = new Set(existing.map(m => m.id));
+    const normalized = (older || [])
+      .filter(m => !ids.has(m.id))
+      .map((m) => ({ ...m, content: messageText(m), reactions: m.reactions || [] }));
+    return {
+      messages: { ...state.messages, [roomId]: [...normalized, ...existing] },
+      hasMore: { ...state.hasMore, [roomId]: (older || []).length >= 50 },
+      loadingOlder: { ...state.loadingOlder, [roomId]: false },
+    };
+  }),
+
+  setLoadingOlder: (roomId, loading) => set(state => ({
+    loadingOlder: { ...state.loadingOlder, [roomId]: loading },
+  })),
+
+  // Replace a message in place (edits).
+  updateMessage: (message) => set(state => {
+    const roomMessages = state.messages[message.room_id] || [];
+    if (!roomMessages.find(m => m.id === message.id)) {
+      // Not loaded yet — treat as new.
+      return {};
+    }
+    const normalized = { ...message, content: messageText(message), reactions: message.reactions || [] };
+    return {
+      messages: {
+        ...state.messages,
+        [message.room_id]: roomMessages.map(m => (m.id === message.id ? { ...m, ...normalized } : m)),
+      },
+    };
   }),
 
   appendMessage: (message) => set(state => {
@@ -77,10 +126,15 @@ export const useChatStore = create((set, get) => ({
     };
   }),
 
+  // Soft delete: keep the record visible as "This message was deleted."
   deleteMessage: (messageId, roomId) => set(state => ({
     messages: {
       ...state.messages,
-      [roomId]: (state.messages[roomId] || []).filter(m => m.id !== messageId),
+      [roomId]: (state.messages[roomId] || []).map(m =>
+        m.id === messageId
+          ? { ...m, is_deleted: 1, content: 'This message was deleted.', encrypted_content: '' }
+          : m
+      ),
     },
   })),
 
@@ -131,6 +185,8 @@ export const useChatStore = create((set, get) => ({
   },
 
   getUnreadCount: (roomId) => get().unread[roomId] || 0,
+
+  clearUnread: (roomId) => set(state => ({ unread: { ...state.unread, [roomId]: 0 } })),
 
   // --- Legacy crypto shims (no-ops, kept for compat) ---
 

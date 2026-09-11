@@ -1,8 +1,18 @@
-/**
- * WebRTC Voice Signaling via Socket.io
- * Handles offer/answer/ICE candidate relay for WebRTC peer connections.
- * Voice data itself travels peer-to-peer — the server only relays signaling.
- */
+import express from 'express';
+import { voiceChannelQueries } from './db.js';
+import { authenticateToken } from './auth.js';
+
+// Public REST: list persistent voice channels (admin manages via /api/admin/voice)
+// WebRTC Voice Signaling via Socket.io below: offer/answer/ICE relay.
+// Voice data itself travels peer-to-peer — the server only relays signaling.
+export const voiceRouter = express.Router();
+voiceRouter.get('/', authenticateToken, (req, res) => {
+  try {
+    res.json({ channels: voiceChannelQueries.list.all() });
+  } catch {
+    res.json({ channels: [] });
+  }
+});
 
 // Map of voice channel → Set of user socket IDs
 const voiceChannels = new Map();

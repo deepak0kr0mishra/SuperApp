@@ -49,12 +49,12 @@ export default function ProfileModal({ userId, onClose, onStartDM }) {
   if (!me) return null;
 
   const copyCode = async (u) => {
-    const text = `${u.username}#${u.user_code || ''}`;
+    const text = `${u.username}#${u.user_code || ''} · UID ${u.uid || ''}`;
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(u.uid || text);
     } catch {
       const ta = document.createElement('textarea');
-      ta.value = text;
+      ta.value = u.uid || text;
       document.body.appendChild(ta);
       ta.select();
       document.execCommand('copy');
@@ -122,6 +122,7 @@ export default function ProfileModal({ userId, onClose, onStartDM }) {
                 <div className="profile-hero-text">
                   <div className="profile-name">{u.display_name || u.username}</div>
                   <div className="profile-handle">@{u.username} {u.user_code ? <span className="code-chip">#{u.user_code}</span> : null}</div>
+                  {u.uid && <div className="profile-handle">UID: <b>{u.uid}</b> <span className="profile-code-hint">(permanent — never changes)</span></div>}
                   <div className={`profile-status ${status}`}>{status === 'online' ? '🟢 Online now' : '⚫ Offline'}</div>
                   {u.role === 'admin' && <span className="admin-chip">🛡️ ADMIN</span>}
                 </div>
@@ -138,7 +139,7 @@ export default function ProfileModal({ userId, onClose, onStartDM }) {
                 <button className="btn-primary" onClick={handleStartDM} disabled={startingDM}>
                   {startingDM ? 'Opening chat…' : `💬 Chat with ${u.display_name || u.username}`}
                 </button>
-                <button className="btn-ghost" onClick={() => copyCode(u)}>{copied ? '✓ Copied!' : `⧉ Copy ${u.username}#${u.user_code || ''}`}</button>
+                <button className="btn-ghost" onClick={() => copyCode(u)}>{copied ? '✓ Copied!' : `⧉ Copy UID ${u.uid || u.user_code || ''}`}</button>
               </div>
               {peerError && <div className="form-error" style={{ marginTop: 10 }}>{peerError}</div>}
             </>
@@ -173,9 +174,10 @@ export default function ProfileModal({ userId, onClose, onStartDM }) {
 
         <div className="profile-code-box">
           <div>
-            <div className="profile-code-label">Your unique code</div>
-            <div className="profile-code-value">#{me.user_code || '------'}</div>
-            <div className="profile-code-hint">Share <b>{me.username}#{me.user_code}</b> so anyone can find you</div>
+            <div className="profile-code-label">Your permanent UID</div>
+            <div className="profile-code-value">{me.uid || me.user_code || '------'}</div>
+            <div className="profile-code-hint">Share <b>{me.uid || `${me.username}#${me.user_code}`}</b> so anyone can find you — it never changes</div>
+            {me.email && <div className="profile-code-hint">{me.email} • member since {timeAgo(me.created_at)}</div>}
           </div>
           <button id="copy-code-btn" className="btn-copy" onClick={() => copyCode(me)}>
             {copied ? '✓ Copied!' : '⧉ Copy'}
