@@ -18,6 +18,9 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
   const { currentChannelId, isMuted, voiceMuted, toggleMute, leaveVoiceChannel, joinVoiceChannel, isConnecting } = useVoiceStore();
   const [replyTo, setReplyTo] = useState(null);
   const [joinError, setJoinError] = useState('');
+  // NOTE: every hook must run before the early return below — otherwise the
+  // hook count changes when a room becomes active and React blanks the page.
+  const voiceMembers = useVoiceStore((s) => (activeRoomId && s.voiceChannelMembers[activeRoomId]) || []);
 
   const activeRoom = rooms.find(r => r.id === activeRoomId);
   const roomTyping = typingUsers[activeRoomId] || {};
@@ -54,7 +57,6 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
   const roomMemberCount = roomMembers.length || activeRoom.memberCount || 0;
   const occupancy = !isDM && limit ? `${roomMemberCount}/${limit}` : `${roomMemberCount}`;
   // Voice lives per-room now (voice channel id == room id).
-  const voiceMembers = useVoiceStore((s) => s.voiceChannelMembers[activeRoomId] || []);
   const inThisCall = currentChannelId === activeRoomId;
   const voiceCount = voiceMembers.length;
 
