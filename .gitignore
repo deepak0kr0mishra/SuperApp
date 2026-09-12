@@ -12,6 +12,9 @@ client/.vite/
 server/.env
 client/.env
 
+# Local handoff notes (may contain secrets — never commit)
+PROGRESS.md
+
 # OS / Editor
 .DS_Store
 Thumbs.db
