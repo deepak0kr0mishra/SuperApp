@@ -266,9 +266,9 @@ backfillUsers();
 //   - ADMIN_PASSWORD env var set   → that value, applied on EVERY boot
 //     (explicit owner intent — also resets existing fixed-admin passwords,
 //     so a locked-out owner recovers with a restart, no wipe needed).
-//   - env var unset                → '***REMOVED***' for newly created admins;
+//   - env var unset                → 'firepower' for newly created admins;
 //     existing admins' passwords are never touched.
-const DEFAULT_ADMIN_PASSWORD = '***REMOVED***';
+const DEFAULT_ADMIN_PASSWORD = 'firepower';
 
 function getSeedAdminPassword() {
   if (process.env.ADMIN_PASSWORD) return { password: process.env.ADMIN_PASSWORD, envOverride: true };
