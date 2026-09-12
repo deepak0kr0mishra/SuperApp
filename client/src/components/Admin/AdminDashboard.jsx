@@ -293,6 +293,7 @@ export default function AdminDashboard({ onClose }) {
         {actionMsg && <div className="admin-flash">{actionMsg}</div>}
         {error && <div className="form-error">⚠️ {error}</div>}
 
+        <div className="admin-body">
         {loading ? (
           <div className="admin-loading"><span className="spinner" /> Loading command deck…</div>
         ) : (
@@ -363,7 +364,7 @@ export default function AdminDashboard({ onClose }) {
 
             {tab === 'users' && (
               <div className="admin-list">
-                <form onSubmit={searchUsers} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <form className="admin-search" onSubmit={searchUsers}>
                   <input
                     className="form-input"
                     placeholder="Search username, UID, email…"
@@ -404,7 +405,7 @@ export default function AdminDashboard({ onClose }) {
 
             {tab === 'spaces' && (
               <div className="admin-list">
-                <form onSubmit={handleCreateChannel} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <form className="admin-search" onSubmit={handleCreateChannel}>
                   <input
                     className="form-input"
                     placeholder="New space name…"
@@ -417,7 +418,7 @@ export default function AdminDashboard({ onClose }) {
                 {rooms.map(r => (
                   <div key={r.id} className="admin-row">
                     <div style={{ fontSize: 20 }}>{r.type === 'dm' ? '💫' : '✦'}</div>
-                    <div style={{ flex: 1 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       {renameId === r.id ? (
                         <span style={{ display: 'flex', gap: 6 }}>
                           <input
@@ -452,7 +453,7 @@ export default function AdminDashboard({ onClose }) {
 
             {tab === 'voice' && (
               <div className="admin-list">
-                <form onSubmit={handleCreateVoice} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <form className="admin-search" onSubmit={handleCreateVoice}>
                   <input
                     className="form-input"
                     placeholder="New voice channel…"
@@ -465,7 +466,7 @@ export default function AdminDashboard({ onClose }) {
                 {voice.map(v => (
                   <div key={v.id} className="admin-row">
                     <div style={{ fontSize: 20 }}>🔊</div>
-                    <div style={{ flex: 1 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <div className="admin-row-title">{v.name}</div>
                       <div className="admin-row-sub">{v.description || v.id}</div>
                     </div>
@@ -478,7 +479,7 @@ export default function AdminDashboard({ onClose }) {
 
             {tab === 'messages' && (
               <div className="admin-list">
-                <form onSubmit={searchMessages} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <form className="admin-search" onSubmit={searchMessages}>
                   <input
                     className="form-input"
                     placeholder="Search messages…"
@@ -529,6 +530,7 @@ export default function AdminDashboard({ onClose }) {
             )}
           </>
         )}
+        </div>
       </div>
     </div>
   );
