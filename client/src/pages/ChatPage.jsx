@@ -111,7 +111,7 @@ export default function ChatPage() {
     setRooms, addRoom, setAllUsers, setActiveRoom, setMembers,
     rooms, activeRoomId,
   } = useChatStore();
-  const { toasts } = useToast();
+  const { toasts, addToast } = useToast();
 
   const [activeTab, setActiveTab] = useState('chats');
   const [showCreateRoom, setShowCreateRoom] = useState(false);
@@ -159,6 +159,12 @@ export default function ChatPage() {
     api.getVoiceChannels().then(({ channels }) => {
       if (!cancelled) useChatStore.getState().setVoiceChannels(channels || []);
     }).catch(() => {});
+    api.myMutes().then(({ mutes }) => {
+      if (!cancelled) useChatStore.getState().setMyMutes(mutes || []);
+    }).catch(() => {});
+    api.myBlocks().then(({ blocks }) => {
+      if (!cancelled) useChatStore.getState().setMyBlocks(blocks || []);
+    }).catch(() => {});
 
     const onHistory = ({ roomId, messages }) => {
       useChatStore.getState().setMessages(roomId, messages);
@@ -195,6 +201,14 @@ export default function ChatPage() {
     const onVoiceInit = (state) => useVoiceStore.getState().setAllVoiceState(state);
     const onVoiceState = ({ channelId, members }) => useVoiceStore.getState().setVoiceChannelMembers(channelId, members);
     const onSpeaking = ({ userId, speaking }) => useVoiceStore.getState().setPeerSpeaking(userId, speaking);
+    const onVoiceMuted = (info) => useVoiceStore.getState().applyVoiceMute(info);
+    const onWatch = ({ watch }) => {
+      if (watch?.room_id) useChatStore.getState().setWatch(watch.room_id, watch);
+    };
+    const onSocketError = ({ message }) => {
+      // Surface server rejections (room full, muted, blocked) without crashing.
+      console.warn('Socket error:', message);
+    };
 
     socket.on('messages:history', onHistory);
     socket.on('message:new', onNew);
@@ -212,6 +226,9 @@ export default function ChatPage() {
     socket.on('voice:initial_state', onVoiceInit);
     socket.on('voice:channel_state', onVoiceState);
     socket.on('voice:speaking', onSpeaking);
+    socket.on('voice:muted', onVoiceMuted);
+    socket.on('watch:update', onWatch);
+    socket.on('error', onSocketError);
 
     return () => {
       cancelled = true;
@@ -229,12 +246,25 @@ export default function ChatPage() {
       socket.off('voice:initial_state', onVoiceInit);
       socket.off('voice:channel_state', onVoiceState);
       socket.off('voice:speaking', onSpeaking);
+      socket.off('voice:muted', onVoiceMuted);
+      socket.off('watch:update', onWatch);
+      socket.off('error', onSocketError);
     };
   }, [user?.id]);
 
   const handleRoomSelect = async (roomId) => {
     const socket = getSocket();
     const room = rooms.find(r => r.id === roomId);
+    // Spaces enforce member caps server-side — surface "Room is full" instead
+    // of silently showing an empty room.
+    if (room && room.type === 'channel') {
+      try {
+        await api.joinRoom(roomId);
+      } catch (err) {
+        addToast(err.message || 'Could not join room', 'error');
+        return;
+      }
+    }
     if (room) setActiveTab(room.type === 'dm' ? 'chats' : 'spaces');
     await joinRoomAndFetchMembers(socket, roomId, setMembers, prevRoomId.current);
     setActiveRoom(roomId);

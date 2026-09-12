@@ -12,6 +12,7 @@ export default function AdminDashboard({ onClose }) {
   const [messages, setMessages] = useState([]);
   const [reports, setReports] = useState([]);
   const [voice, setVoice] = useState([]);
+  const [mutes, setMutes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionMsg, setActionMsg] = useState('');
@@ -31,13 +32,14 @@ export default function AdminDashboard({ onClose }) {
     setLoading(true);
     setError('');
     try {
-      const [{ stats: s }, { users: u }, { rooms: r }, { messages: m }, { reports: rep }, vc] = await Promise.all([
+      const [{ stats: s }, { users: u }, { rooms: r }, { messages: m }, { reports: rep }, vc, { mutes: mu }] = await Promise.all([
         api.adminStats(),
         api.adminGetUsers(),
         api.adminGetRooms(),
         api.adminRecentMessages(),
         api.adminGetReports().catch(() => ({ reports: [] })),
         api.adminGetVoice().catch(() => ({ channels: [] })),
+        api.adminGetMutes().catch(() => ({ mutes: [] })),
       ]);
       setStats(s);
       setUsers(u);
@@ -45,6 +47,7 @@ export default function AdminDashboard({ onClose }) {
       setMessages(m);
       setReports(rep || []);
       setVoice(vc.channels || []);
+      setMutes(mu || []);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -176,7 +179,36 @@ export default function AdminDashboard({ onClose }) {
     } catch (err) { flash(err.message); }
   };
 
-  const BACKUP_TABLES_CLIENT = ['users', 'rooms', 'room_members', 'messages', 'reactions', 'files', 'reports', 'room_reads', 'voice_channels', 'reaction_favorites'];
+  const handleMute = async (u, kind) => {
+    const duration = prompt(`Mute @${u.username} (${kind}) — duration? hour/day/week`, 'day');
+    if (!duration || !['hour', 'day', 'week'].includes(duration)) return;
+    try {
+      await api.adminMuteUser(u.id, kind, duration, '');
+      const { mutes: mu } = await api.adminGetMutes().catch(() => ({ mutes: [] }));
+      setMutes(mu || []);
+      flash(`${kind === 'voice' ? '🔇 Voice-muted' : '🚫 Chat-muted'} @${u.username} for ${duration}`);
+    } catch (err) { flash(err.message); }
+  };
+
+  const handleUnmute = async (userId, kind) => {
+    try {
+      await api.adminUnmuteUser(userId, kind);
+      setMutes(prev => prev.filter(x => !(x.user_id === userId && x.kind === kind)));
+      flash(`Unmuted (${kind})`);
+    } catch (err) { flash(err.message); }
+  };
+
+  const handleRemoveMember = async (roomId, userId, username) => {
+    if (!confirm(`Remove @${username} from this room?`)) return;
+    try {
+      await api.adminRemoveMember(roomId, userId);
+      const { rooms: r } = await api.adminGetRooms().catch(() => ({ rooms: [] }));
+      if (r?.length) setRooms(r);
+      flash(`Removed @${username}`);
+    } catch (err) { flash(err.message); }
+  };
+
+  const BACKUP_TABLES_CLIENT = ['users', 'rooms', 'room_members', 'messages', 'reactions', 'files', 'reports', 'room_reads', 'voice_channels', 'reaction_favorites', 'user_mutes', 'user_blocks', 'room_watch'];
 
   const backupStamp = () => {
     const d = new Date();
@@ -278,11 +310,12 @@ export default function AdminDashboard({ onClose }) {
         </div>
 
         <div className="admin-tabs">
-          {['overview', 'users', 'spaces', 'voice', 'messages', 'reports'].map(t => (
+          {['overview', 'users', 'spaces', 'mutes', 'voice', 'messages', 'reports'].map(t => (
             <button key={t} className={`admin-tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
               {t === 'overview' ? '📊 Overview'
                 : t === 'users' ? '👥 Users'
                 : t === 'spaces' ? '✨ Spaces'
+                : t === 'mutes' ? `🔇 Mutes${mutes.length ? ` (${mutes.length})` : ''}`
                 : t === 'voice' ? '🔊 Voice'
                 : t === 'messages' ? '💬 Messages'
                 : `⚑ Reports${openReports.length ? ` (${openReports.length})` : ''}`}
@@ -389,7 +422,11 @@ export default function AdminDashboard({ onClose }) {
                           ? <button className="btn-mini" onClick={() => handleRole(u, 'user')}>Demote</button>
                           : <button className="btn-mini primary" onClick={() => handleRole(u, 'admin')}>Make admin</button>}
                         {u.role !== 'admin' && (
-                          <button className="btn-mini" onClick={() => handleResetPassword(u)}>Reset PW</button>
+                          <>
+                            <button className="btn-mini" onClick={() => handleResetPassword(u)}>Reset PW</button>
+                            <button className="btn-mini" title="Voice-mute (listen only)" onClick={() => handleMute(u, 'voice')}>🔇</button>
+                            <button className="btn-mini" title="Chat-mute (DMs only)" onClick={() => handleMute(u, 'chat')}>🚫</button>
+                          </>
                         )}
                         <button className="btn-mini" onClick={() => handleDisable(u)}>{u.is_disabled ? 'Enable' : 'Disable'}</button>
                         <button className="btn-mini danger" onClick={() => handleDeleteUser(u)}>Delete</button>
@@ -433,12 +470,12 @@ export default function AdminDashboard({ onClose }) {
                         </span>
                       ) : (
                         <>
-                          <div className="admin-row-title">#{r.name} <span className="admin-row-sub">({r.type})</span></div>
+                          <div className="admin-row-title">#{r.name} <span className="admin-row-sub">({r.type}{r.max_members ? ` · max ${r.max_members}` : ''})</span></div>
                           <div className="admin-row-sub">{r.memberCount ?? '?'} members • {r.msgCount ?? '?'} msgs</div>
                         </>
                       )}
                     </div>
-                    {['general', 'media', 'audio', 'random'].includes(r.id)
+                    {['general', 'developers', 'creatives', 'chill-01', 'chill-02'].includes(r.id)
                       ? <span className="admin-row-sub">protected</span>
                       : r.type !== 'dm' && renameId !== r.id && (
                         <span className="admin-row-actions">
@@ -448,6 +485,26 @@ export default function AdminDashboard({ onClose }) {
                       )}
                   </div>
                 ))}
+              </div>
+            )}
+
+            {tab === 'mutes' && (
+              <div className="admin-list">
+                <div className="admin-hint">🔇 voice = listen-only in calls · 🚫 chat = DMs only. Hour / day / week, revokable anytime. Admins can't be muted.</div>
+                {mutes.map((m) => (
+                  <div key={`${m.user_id}:${m.kind}`} className="admin-row">
+                    <div style={{ fontSize: 20 }}>{m.kind === 'voice' ? '🔇' : '🚫'}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="admin-row-title">@{m.username || m.user_id} <span className="admin-chip">{m.kind}</span></div>
+                      <div className="admin-row-sub">
+                        until {m.expires_at ? new Date(m.expires_at * 1000).toLocaleString() : '?'}
+                        {m.reason ? ` · ${m.reason}` : ''}
+                      </div>
+                    </div>
+                    <button className="btn-mini primary" onClick={() => handleUnmute(m.user_id, m.kind)}>Unmute</button>
+                  </div>
+                ))}
+                {mutes.length === 0 && <div className="sidebar-empty">Nobody muted 🎉</div>}
               </div>
             )}
 

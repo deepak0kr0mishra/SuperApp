@@ -5,12 +5,12 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import authRouter, { authenticateToken } from './auth.js';
-import roomsRouter, { canAccessRoom } from './rooms.js';
+import roomsRouter, { canAccessRoom, roomFullError } from './rooms.js';
 import filesRouter from './files.js';
 import usersRouter from './users.js';
 import adminRouter from './admin.js';
 import reportsRouter from './reports.js';
-import { messageQueries, roomQueries, userQueries, readQueries, replaceReaction } from './db.js';
+import { messageQueries, roomQueries, userQueries, readQueries, replaceReaction, isChatMuted, isDMBlocked, watchQueries, extractYouTubeId } from './db.js';
 import { setupVoiceSignaling, getVoiceChannelState, voiceRouter } from './voice.js';
 import { securityHeaders, generalLimiter, messageLimiter, sanitizeMessageContent } from './security.js';
 import { MESSAGE_MAX_LENGTH } from './db.js';
@@ -104,6 +104,11 @@ app.post('/api/conversations', authenticateToken, (req, res) => {
   const myId = req.user.userId;
   const target = userQueries.findById.get(targetUserId);
   if (!target) return res.status(404).json({ error: 'User not found' });
+  try {
+    if (isDMBlocked(myId, targetUserId)) {
+      return res.status(403).json({ error: 'Cannot start this chat (blocked)' });
+    }
+  } catch {}
   const allRooms = roomQueries.findAll.all();
   const existingDm = allRooms.find(r => {
     if (r.type !== 'dm') return false;
@@ -113,7 +118,7 @@ app.post('/api/conversations', authenticateToken, (req, res) => {
   if (existingDm) return res.json({ room: existingDm, conversation: existingDm });
   const id = uuidv4();
   const me = userQueries.findById.get(myId);
-  roomQueries.create.run({ id, name: `${me.username}-${target.username}`, description: 'Direct message', type: 'dm', created_by: myId });
+  roomQueries.create.run({ id, name: `${me.username}-${target.username}`, description: 'Direct message', type: 'dm', max_members: null, created_by: myId });
   roomQueries.addMember.run(id, myId);
   roomQueries.addMember.run(id, targetUserId);
   const room = roomQueries.findById.get(id);
@@ -156,10 +161,26 @@ function createMessage(userId, body) {
   if (!roomId) return { error: 'roomId required', status: 400 };
   const room = roomQueries.findById.get(roomId);
   if (!room) return { error: 'Room not found', status: 404 };
+  // Level-2 chat mute: no typing/sending in any space or group — DMs still allowed.
+  if (room.type !== 'dm' && isChatMuted(userId)) {
+    return { error: 'You are muted from chatting (admin mute)', status: 403 };
+  }
   if (room.type === 'dm') {
     const member = roomQueries.isMember.get(roomId, userId);
     if (!member) return { error: 'You are not part of this conversation', status: 403 };
+    // DM block: if either side blocked the other, nobody can message that DM.
+    try {
+      const members = roomQueries.getMembers.all(roomId);
+      const other = members.find((m) => m.id !== userId);
+      if (other && isDMBlocked(userId, other.id)) {
+        return { error: 'Cannot message this chat (blocked)', status: 403 };
+      }
+    } catch {}
   } else {
+    // Sending auto-joins public spaces — but never over the member cap
+    // (admins bypass, like everywhere else).
+    const fullMsg = roomFullError(room, userId);
+    if (fullMsg) return { error: fullMsg, status: 403 };
     try { roomQueries.addMember.run(roomId, userId); } catch {}
   }
   const text = sanitizeMessageContent(
@@ -315,8 +336,15 @@ io.on('connection', (socket) => {
         return;
       }
       const room = access.room;
-      // Auto-join public channels so default channels always work
+      // Capacity: admins bypass full rooms, everyone else is rejected.
       if (room.type === 'channel') {
+        try {
+          const fullMsg = roomFullError(room, socket.userId);
+          if (fullMsg) {
+            socket.emit('error', { message: fullMsg });
+            return;
+          }
+        } catch {}
         try { roomQueries.addMember.run(roomId, socket.userId); } catch {}
       }
       socket.join(`room:${roomId}`);
@@ -431,11 +459,12 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Typing indicators ---
+  // --- Typing indicators (chat-muted users stay silent in spaces) ---
   socket.on('typing:start', ({ roomId }) => {
     if (!roomId) return;
     const access = canAccessRoom(socket.userId, roomId);
     if (!access.ok) return;
+    if (access.room.type !== 'dm' && isChatMuted(socket.userId)) return;
     socket.to(`room:${roomId}`).emit('typing:start', { userId: socket.userId, username: socket.username, roomId });
     socket.to(`room:${roomId}`).emit('typing:update', {
       userId: socket.userId,
@@ -459,6 +488,55 @@ io.on('connection', (socket) => {
   // --- Room created event relay ---
   socket.on('room:created', (room) => {
     io.emit('room:new', room);
+  });
+
+  // --- Watch together: persist + broadcast per-room player state ---
+  const emitWatch = (roomId) => {
+    try {
+      const state = watchQueries.get.get(roomId);
+      if (state) io.to(`room:${roomId}`).emit('watch:update', { watch: state });
+    } catch {}
+  };
+  socket.on('watch:set', ({ roomId, url, videoId }) => {
+    try {
+      if (!roomId) return;
+      const access = canAccessRoom(socket.userId, roomId);
+      if (!access.ok) {
+        socket.emit('error', { message: access.error });
+        return;
+      }
+      const raw = String(videoId || url || '').slice(0, 500);
+      if (!raw) {
+        try { watchQueries.clear.run(roomId); } catch {}
+        io.to(`room:${roomId}`).emit('watch:update', {
+          watch: { room_id: roomId, video_id: '', url: '', is_playing: 0, position: 0 },
+        });
+        return;
+      }
+      const vid = extractYouTubeId(raw);
+      if (!vid) {
+        socket.emit('error', { message: 'Send a valid YouTube link' });
+        return;
+      }
+      watchQueries.set.run(roomId, vid, `https://www.youtube.com/watch?v=${vid}`, 1, 0, socket.userId);
+      emitWatch(roomId);
+    } catch (err) {
+      console.error('watch:set error:', err);
+    }
+  });
+  socket.on('watch:state', ({ roomId, is_playing, position }) => {
+    try {
+      if (!roomId) return;
+      const access = canAccessRoom(socket.userId, roomId);
+      if (!access.ok) return;
+      const cur = watchQueries.get.get(roomId);
+      if (!cur?.video_id) return;
+      const pos = Math.max(0, Math.min(Number(position) || 0, 86400));
+      watchQueries.updateState.run(is_playing ? 1 : 0, pos, roomId);
+      emitWatch(roomId);
+    } catch (err) {
+      console.error('watch:state error:', err);
+    }
   });
 
   // --- Disconnect (multi-tab safe) ---

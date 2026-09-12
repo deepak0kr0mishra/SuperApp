@@ -31,6 +31,9 @@ export const useChatStore = create((set, get) => ({
   unread: {},         // roomId → count
   allUsers: [],
   voiceChannels: [],
+  watch: {},        // roomId → { video_id, url, is_playing, position, ... }
+  myMutes: [],      // my active mutes [{ kind, expires_at, ... }]
+  myBlocks: [],     // users I blocked
 
   setRooms: (rooms) => set((state) => {
     // Preserve server-provided unread counts for rooms we haven't loaded yet.
@@ -44,6 +47,14 @@ export const useChatStore = create((set, get) => ({
   setVoiceChannels: (channels) => set({ voiceChannels: channels || [] }),
 
   setAllUsers: (users) => set({ allUsers: users }),
+
+  setWatch: (roomId, watch) => set(state => ({
+    watch: { ...state.watch, [roomId]: watch },
+  })),
+
+  setMyMutes: (mutes) => set({ myMutes: mutes || [] }),
+
+  setMyBlocks: (blocks) => set({ myBlocks: blocks || [] }),
 
   setActiveRoom: (roomId) => {
     set({ activeRoomId: roomId });

@@ -39,6 +39,7 @@ db.exec(`
     name TEXT NOT NULL,
     description TEXT DEFAULT '',
     type TEXT NOT NULL DEFAULT 'channel',
+    max_members INTEGER,
     created_by TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     FOREIGN KEY (created_by) REFERENCES users(id)
@@ -133,6 +134,37 @@ db.exec(`
     created_by TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
+
+  -- Moderation + social: timed mutes (voice / chat), DM blocks, watch-together state.
+  CREATE TABLE IF NOT EXISTS user_mutes (
+    user_id TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'chat',
+    expires_at INTEGER NOT NULL,
+    created_by TEXT,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (user_id, kind)
+  );
+
+  CREATE TABLE IF NOT EXISTS user_blocks (
+    blocker_id TEXT NOT NULL,
+    blocked_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (blocker_id, blocked_id),
+    FOREIGN KEY (blocker_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (blocked_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS room_watch (
+    room_id TEXT PRIMARY KEY,
+    video_id TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    is_playing INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    set_by TEXT,
+    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+  );
 `);
 
 // --- Lightweight migrations for existing DBs ---
@@ -149,6 +181,18 @@ try { db.exec(`ALTER TABLE messages ADD COLUMN deleted_at INTEGER`); } catch {}
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_code ON users(user_code)`); } catch {}
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uid ON users(uid)`); } catch {}
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)`); } catch {}
+try { db.exec(`ALTER TABLE rooms ADD COLUMN max_members INTEGER`); } catch {}
+try { db.exec(`CREATE TABLE IF NOT EXISTS user_mutes (
+  user_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'chat', expires_at INTEGER NOT NULL,
+  created_by TEXT, reason TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  PRIMARY KEY (user_id, kind))`); } catch {}
+try { db.exec(`CREATE TABLE IF NOT EXISTS user_blocks (
+  blocker_id TEXT NOT NULL, blocked_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()), PRIMARY KEY (blocker_id, blocked_id))`); } catch {}
+try { db.exec(`CREATE TABLE IF NOT EXISTS room_watch (
+  room_id TEXT PRIMARY KEY, video_id TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '',
+  is_playing INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()), set_by TEXT)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(room_id, created_at DESC)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at DESC)`); } catch {}
@@ -157,11 +201,20 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_users_search ON users(username, us
 // recent reaction per message (highest rowid = latest insert).
 try { db.exec(`DELETE FROM reactions WHERE rowid NOT IN (SELECT MAX(rowid) FROM reactions GROUP BY message_id, user_id)`); } catch {}
 
+// Fixed space layout: general (unlimited) + Developers(6) + Creatives(6) +
+// Chill_01(2) + Chill_02(2). Voice runs per-space (voice channel id == room id).
+export const SPACE_DEFS = [
+  { id: 'general', name: 'general', description: 'General chat for everyone', max_members: null },
+  { id: 'developers', name: 'Developers', description: 'Builders room (max 6)', max_members: 6 },
+  { id: 'creatives', name: 'Creatives', description: 'Creatives room (max 6)', max_members: 6 },
+  { id: 'chill-01', name: 'Chill_01', description: 'Chill duo (max 2)', max_members: 2 },
+  { id: 'chill-02', name: 'Chill_02', description: 'Chill duo (max 2)', max_members: 2 },
+];
+const LEGACY_SPACE_IDS = ['media', 'audio', 'random'];
+const LEGACY_VOICE_IDS = ['voice-general', 'voice-gaming', 'voice-study'];
+
 // Seed default channels if not exist
 const seedRooms = () => {
-  const existing = db.prepare('SELECT COUNT(*) as count FROM rooms').get();
-  if (existing.count > 0) return;
-
   const systemId = 'system';
   // Insert a system user for seeding
   db.prepare(`
@@ -169,34 +222,46 @@ const seedRooms = () => {
     VALUES (?, 'system', 'System', 'N/A', '#6366f1')
   `).run(systemId);
 
-  const channels = [
-    { id: 'general', name: 'general', description: 'General chat for everyone' },
-    { id: 'media', name: 'media', description: 'Share photos, videos, and files' },
-    { id: 'audio', name: 'audio', description: 'Share music and audio clips' },
-    { id: 'random', name: 'random', description: 'Off-topic conversations' },
-  ];
-
   const insertRoom = db.prepare(
-    'INSERT OR IGNORE INTO rooms (id, name, description, type, created_by) VALUES (?, ?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO rooms (id, name, description, type, max_members, created_by) VALUES (?, ?, ?, ?, ?, ?)'
   );
-  for (const ch of channels) {
-    insertRoom.run(ch.id, ch.name, ch.description, 'channel', systemId);
+  for (const ch of SPACE_DEFS) {
+    insertRoom.run(ch.id, ch.name, ch.description, 'channel', ch.max_members, systemId);
   }
+  // Enforce names/limits on every boot (rename-safe), then drop legacy spaces.
+  try {
+    const upd = db.prepare('UPDATE rooms SET name = ?, description = ?, max_members = ? WHERE id = ?');
+    for (const ch of SPACE_DEFS) upd.run(ch.name, ch.description, ch.max_members, ch.id);
+  } catch {}
+  try {
+    const del = db.prepare('DELETE FROM rooms WHERE id = ?');
+    for (const legacy of LEGACY_SPACE_IDS) del.run(legacy);
+  } catch {}
+  // Free member spots in limited rooms: fixed-admin staff don't occupy them.
+  try {
+    const rmAdmin = db.prepare(
+      `DELETE FROM room_members WHERE room_id IN ('developers','creatives','chill-01','chill-02')
+       AND user_id IN ('admin-01','admin-02','admin-03','admin-04','admin-05')`
+    );
+    rmAdmin.run();
+  } catch {}
 };
 
 seedRooms();
 
-// Seed default voice channels (persistent list; signaling stays dynamic)
+// Seed voice channels mirroring the 5 spaces (voice id == room id so the
+// chat panel can offer one big "Join call" per room). Legacy standalone
+// voice channels are removed.
 const seedVoice = () => {
   try {
-    const count = db.prepare('SELECT COUNT(*) as c FROM voice_channels').get();
-    if (count.c > 0) return;
     const ins = db.prepare(
       'INSERT OR IGNORE INTO voice_channels (id, name, description, created_by) VALUES (?, ?, ?, ?)'
     );
-    ins.run('voice-general', 'General', 'General voice hangout', 'system');
-    ins.run('voice-gaming', 'Gaming', 'Gaming voice channel', 'system');
-    ins.run('voice-study', 'Study Room', 'Quiet study room', 'system');
+    for (const ch of SPACE_DEFS) {
+      ins.run(ch.id, ch.name, `${ch.name} voice`, 'system');
+    }
+    const del = db.prepare('DELETE FROM voice_channels WHERE id = ?');
+    for (const legacy of LEGACY_VOICE_IDS) del.run(legacy);
   } catch {}
 };
 seedVoice();
@@ -330,9 +395,11 @@ const seedFixedAdmins = () => {
           db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(hash, existing.id);
         }
       }
-      // Fixed admins belong to every public channel.
+      // Fixed admins belong to every UNLIMITED public channel (general).
+      // Limited rooms (Developers/Creatives/Chill) keep their member spots for
+      // regular users — admins can still join anytime (capacity bypass).
       try {
-        const channels = db.prepare(`SELECT id FROM rooms WHERE type = 'channel'`).all();
+        const channels = db.prepare(`SELECT id FROM rooms WHERE type = 'channel' AND max_members IS NULL`).all();
         const add = db.prepare('INSERT OR IGNORE INTO room_members (room_id, user_id) VALUES (?, ?)');
         for (const ch of channels) add.run(ch.id, existing?.id || id);
       } catch {}
@@ -399,10 +466,18 @@ export const roomQueries = {
   `),
   findById: db.prepare('SELECT * FROM rooms WHERE id = ?'),
   create: db.prepare(`
-    INSERT INTO rooms (id, name, description, type, created_by)
-    VALUES (@id, @name, @description, @type, @created_by)
+    INSERT INTO rooms (id, name, description, type, max_members, created_by)
+    VALUES (@id, @name, @description, @type, @max_members, @created_by)
   `),
   rename: db.prepare('UPDATE rooms SET name = ?, description = COALESCE(?, description) WHERE id = ?'),
+  setLimit: db.prepare('UPDATE rooms SET max_members = ? WHERE id = ?'),
+  countMembers: db.prepare('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?'),
+  // Occupancy for limited rooms: fixed/admin staff don't take member spots.
+  countOccupants: db.prepare(`
+    SELECT COUNT(*) as c FROM room_members rm
+    JOIN users u ON rm.user_id = u.id
+    WHERE rm.room_id = ? AND COALESCE(u.role, 'user') != 'admin'
+  `),
   getMembers: db.prepare(`
     SELECT u.id, u.uid, u.username, u.display_name, u.avatar_color, u.status, u.public_key, u.user_code, u.bio, u.role
     FROM room_members rm JOIN users u ON rm.user_id = u.id
@@ -576,6 +651,97 @@ export const fileQueries = {
     VALUES (@id, @uploader_id, @room_id, @file_name, @file_size, @mime_type, @path)
   `),
   findById: db.prepare('SELECT * FROM files WHERE id = ?'),
+};
+
+export const MUTE_KINDS = ['voice', 'chat'];
+export const MUTE_DURATIONS = { hour: 3600, day: 86400, week: 604800 };
+
+export const muteQueries = {
+  get: db.prepare('SELECT * FROM user_mutes WHERE user_id = ? AND kind = ?'),
+  listActive: db.prepare('SELECT * FROM user_mutes WHERE expires_at > unixepoch()'),
+  listFor: db.prepare('SELECT * FROM user_mutes WHERE user_id = ? AND expires_at > unixepoch()'),
+  upsert: db.prepare(`
+    INSERT INTO user_mutes (user_id, kind, expires_at, created_by, reason, created_at)
+    VALUES (?, ?, ?, ?, ?, unixepoch())
+    ON CONFLICT(user_id, kind) DO UPDATE SET expires_at = excluded.expires_at,
+      created_by = excluded.created_by, reason = excluded.reason, created_at = unixepoch()
+  `),
+  revoke: db.prepare('DELETE FROM user_mutes WHERE user_id = ? AND kind = ?'),
+  clearExpired: db.prepare('DELETE FROM user_mutes WHERE expires_at <= unixepoch()'),
+  clearUser: db.prepare('DELETE FROM user_mutes WHERE user_id = ?'),
+};
+
+export function getActiveMute(userId, kind) {
+  try {
+    const row = muteQueries.get.get(userId, kind);
+    if (!row) return null;
+    if (row.expires_at <= Math.floor(Date.now() / 1000)) {
+      try { muteQueries.revoke.run(userId, kind); } catch {}
+      return null;
+    }
+    return row;
+  } catch { return null; }
+}
+export const isVoiceMuted = (userId) => !!getActiveMute(userId, 'voice');
+export const isChatMuted = (userId) => !!getActiveMute(userId, 'chat');
+
+export const blockQueries = {
+  add: db.prepare('INSERT OR IGNORE INTO user_blocks (blocker_id, blocked_id) VALUES (?, ?)'),
+  remove: db.prepare('DELETE FROM user_blocks WHERE blocker_id = ? AND blocked_id = ?'),
+  isBlocked: db.prepare('SELECT 1 FROM user_blocks WHERE blocker_id = ? AND blocked_id = ?'),
+  blockedBy: db.prepare('SELECT blocker_id FROM user_blocks WHERE blocked_id = ?'),
+  myBlocks: db.prepare(`
+    SELECT u.id, u.uid, u.username, u.display_name, u.avatar_color, u.status, u.user_code
+    FROM user_blocks b JOIN users u ON b.blocked_id = u.id WHERE b.blocker_id = ?
+  `),
+  clearUser: db.prepare('DELETE FROM user_blocks WHERE blocker_id = ? OR blocked_id = ?'),
+};
+
+// True if a DM between a and b is blocked in either direction.
+export function isDMBlocked(a, b) {
+  try {
+    if (blockQueries.isBlocked.get(a, b)) return true;
+    if (blockQueries.isBlocked.get(b, a)) return true;
+    return false;
+  } catch { return false; }
+}
+
+export function extractYouTubeId(input) {
+  if (!input || typeof input !== 'string') return '';
+  const s = input.trim();
+  if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+  try {
+    const u = new URL(s);
+    const host = u.hostname.replace(/^www\./, '').toLowerCase();
+    if (host === 'youtu.be') {
+      const id = u.pathname.slice(1).split(/[?#/]/)[0];
+      return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : '';
+    }
+    if (host.endsWith('youtube.com')) {
+      const v = u.searchParams.get('v');
+      if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
+      const parts = u.pathname.split('/').filter(Boolean);
+      // /embed/ID, /shorts/ID, /live/ID
+      const idx = parts.findIndex((p) => ['embed', 'shorts', 'live'].includes(p));
+      if (idx >= 0 && parts[idx + 1] && /^[A-Za-z0-9_-]{11}$/.test(parts[idx + 1])) return parts[idx + 1];
+    }
+  } catch {}
+  return '';
+}
+
+export const watchQueries = {
+  get: db.prepare('SELECT * FROM room_watch WHERE room_id = ?'),
+  set: db.prepare(`
+    INSERT INTO room_watch (room_id, video_id, url, is_playing, position, updated_at, set_by)
+    VALUES (?, ?, ?, ?, ?, unixepoch(), ?)
+    ON CONFLICT(room_id) DO UPDATE SET video_id = excluded.video_id, url = excluded.url,
+      is_playing = excluded.is_playing, position = excluded.position,
+      updated_at = unixepoch(), set_by = excluded.set_by
+  `),
+  updateState: db.prepare(
+    'UPDATE room_watch SET is_playing = ?, position = ?, updated_at = unixepoch() WHERE room_id = ?'
+  ),
+  clear: db.prepare('DELETE FROM room_watch WHERE room_id = ?'),
 };
 
 export { generateUserCode };

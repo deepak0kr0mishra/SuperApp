@@ -4,12 +4,20 @@ import { useAuthStore } from '../../stores/authStore.js';
 import { useVoiceStore } from '../../stores/voiceStore.js';
 import MessageList from './MessageList.jsx';
 import MessageInput from './MessageInput.jsx';
+import WatchTogether from './WatchTogether.jsx';
+
+const ROOM_ICONS = { general: '🍵', developers: '💻', creatives: '🎨', chill_01: '☕', chill_02: '☕' };
+function roomIcon(name) {
+  const key = String(name || '').toLowerCase().replace('-', '_');
+  return ROOM_ICONS[key] || '✦';
+}
 
 export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar }) {
   const { activeRoomId, rooms, members, typingUsers } = useChatStore();
   const { user } = useAuthStore();
-  const { currentChannelId, isMuted, toggleMute, leaveVoiceChannel, speakingUsers } = useVoiceStore();
+  const { currentChannelId, isMuted, voiceMuted, toggleMute, leaveVoiceChannel, joinVoiceChannel, isConnecting } = useVoiceStore();
   const [replyTo, setReplyTo] = useState(null);
+  const [joinError, setJoinError] = useState('');
 
   const activeRoom = rooms.find(r => r.id === activeRoomId);
   const roomTyping = typingUsers[activeRoomId] || {};
@@ -41,10 +49,27 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
   const peer = isDM ? roomMembers.find(m => m.id !== user?.id) : null;
   const peerStatus = peer ? (useChatStore.getState().userStatuses[peer.id] || peer.status || 'offline') : null;
 
-  const roomIcons = { general: '🍵', media: '🎨', audio: '🎧', random: '⚡' };
-  const roomIcon = isDM ? null : (roomIcons[(activeRoom.name || '').toLowerCase()] || '✦');
-  const roomMemberCount = roomMembers.length;
-  const voiceCount = (useVoiceStore.getState().voiceChannelMembers[currentChannelId] || []).length;
+  const roomIconEl = isDM ? null : roomIcon(activeRoom.name);
+  const limit = activeRoom.max_members ?? null;
+  const roomMemberCount = roomMembers.length || activeRoom.memberCount || 0;
+  const occupancy = !isDM && limit ? `${roomMemberCount}/${limit}` : `${roomMemberCount}`;
+  // Voice lives per-room now (voice channel id == room id).
+  const voiceMembers = useVoiceStore((s) => s.voiceChannelMembers[activeRoomId] || []);
+  const inThisCall = currentChannelId === activeRoomId;
+  const voiceCount = voiceMembers.length;
+
+  const handleJoinCall = async () => {
+    setJoinError('');
+    if (inThisCall) {
+      leaveVoiceChannel();
+      return;
+    }
+    try {
+      await joinVoiceChannel(activeRoomId);
+    } catch (err) {
+      setJoinError(err?.message || 'Could not join voice');
+    }
+  };
 
   return (
     <div className="chat-area">
@@ -64,7 +89,7 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
           </button>
         ) : (
           <>
-            <span style={{ fontSize: 18 }}>{roomIcon}</span>
+            <span style={{ fontSize: 18 }}>{roomIconEl}</span>
             <div className="topbar-name">
               {activeRoom.name}
               {activeRoom.description && <span className="topbar-desc">{activeRoom.description}</span>}
@@ -76,7 +101,7 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
           <div className="voice-live-pill">
             <span className="voice-member-dot" />
             <span>🔊 Voice live{voiceCount ? ` • ${voiceCount}` : ''}</span>
-            <button id="topbar-mute-btn" className="pill-btn" onClick={toggleMute} title={isMuted ? 'Unmute' : 'Mute'}>
+            <button id="topbar-mute-btn" className="pill-btn" onClick={toggleMute} title={voiceMuted ? 'Voice-muted by admin (listen only)' : isMuted ? 'Unmute' : 'Mute'}>
               {isMuted ? '🔇' : '🎙️'}
             </button>
             <button id="topbar-leave-voice-btn" className="pill-btn danger" onClick={leaveVoiceChannel} title="Leave voice">✕</button>
@@ -85,13 +110,37 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
 
         <div className="topbar-actions">
           {!isDM && roomMemberCount > 0 && (
-            <span className="member-count">✦ {roomMemberCount} members</span>
+            <span className="member-count" title={limit ? `Room limit ${limit}` : 'Unlimited room'}>
+              ✦ {occupancy} in room{voiceCount ? ` · 🔊 ${voiceCount} in call` : ''}
+            </span>
           )}
           {isDM && peer && (
             <button className="icon-btn" onClick={() => onOpenProfile?.(peer.id)} title="View profile">👤</button>
           )}
         </div>
       </div>
+
+      {/* Room call bar: chat + voice live side by side */}
+      {!isDM && (
+        <div className="room-call-bar">
+          <div className="room-call-info">
+            <span className="room-call-count">👥 {occupancy} here</span>
+            {voiceCount > 0 && <span className="room-call-live">🔊 {voiceCount} in call</span>}
+            {voiceMuted && inThisCall && (
+              <span className="room-call-muted">🔇 Voice-muted (listen only)</span>
+            )}
+          </div>
+          <button
+            id="join-call-btn"
+            className={`btn-join-call ${inThisCall ? 'in-call' : ''}`}
+            onClick={handleJoinCall}
+            disabled={!!isConnecting}
+          >
+            {inThisCall ? '✕ Leave call' : '🔊 Join call'}
+          </button>
+        </div>
+      )}
+      {joinError && <div className="form-error" style={{ margin: '0 12px' }}>{joinError}</div>}
 
       {/* Messages */}
       <MessageList roomId={activeRoomId} onReply={setReplyTo} onOpenProfile={onOpenProfile} />
@@ -106,6 +155,9 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
           </>
         )}
       </div>
+
+      {/* Watch together (spaces only) */}
+      {!isDM && <WatchTogether roomId={activeRoomId} />}
 
       {/* Input */}
       <MessageInput roomId={activeRoomId} replyTo={replyTo} onClearReply={() => setReplyTo(null)} />

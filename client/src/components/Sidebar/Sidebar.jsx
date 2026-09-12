@@ -5,20 +5,27 @@ import { useVoiceStore } from '../../stores/voiceStore.js';
 import { Avatar } from '../shared/Avatar.jsx';
 
 export const VOICE_CHANNELS = [
-  { id: 'voice-general', name: 'General', emoji: '🔊' },
-  { id: 'voice-gaming', name: 'Gaming', emoji: '🔊' },
-  { id: 'voice-study', name: 'Study Room', emoji: '🔊' },
+  { id: 'general', name: 'general', emoji: '🔊' },
+  { id: 'developers', name: 'Developers', emoji: '🔊' },
+  { id: 'creatives', name: 'Creatives', emoji: '🔊' },
+  { id: 'chill-01', name: 'Chill_01', emoji: '🔊' },
+  { id: 'chill-02', name: 'Chill_02', emoji: '🔊' },
 ];
 
 const CHANNEL_ICONS = {
   general: '🍵',
-  media: '🎨',
-  audio: '🎧',
-  random: '⚡',
+  developers: '💻',
+  creatives: '🎨',
+  chill_01: '☕',
+  'chill-01': '☕',
+  chill_02: '☕',
+  'chill-02': '☕',
 };
 
 function channelIcon(name) {
-  return CHANNEL_ICONS[(name || '').toLowerCase()] || '✦';
+  const key = String(name || '').toLowerCase().replace('-', '_');
+  if (CHANNEL_ICONS[key]) return CHANNEL_ICONS[key];
+  return CHANNEL_ICONS[String(name || '').toLowerCase()] || '✦';
 }
 
 function previewOf(msg) {
@@ -46,7 +53,7 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
       document.documentElement.dataset.theme = next;
     } catch {}
   };
-  const { currentChannelId, voiceChannelMembers, speakingUsers, joinVoiceChannel, leaveVoiceChannel, isMuted, toggleMute } = useVoiceStore();
+  const { currentChannelId, voiceChannelMembers, speakingUsers, joinVoiceChannel, leaveVoiceChannel, isMuted, voiceMuted, toggleMute } = useVoiceStore();
   const [filter, setFilter] = useState('');
 
   const channels = useMemo(() => rooms.filter(r => r.type === 'channel'), [rooms]);
@@ -107,6 +114,11 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
   };
 
   const isAdmin = user?.role === 'admin';
+
+  const occupancyOf = (room) => {
+    const count = members[room.id]?.length ?? room.memberCount ?? 0;
+    return room.max_members ? `${count}/${room.max_members}` : `${count}`;
+  };
 
   return (
     <aside className="sidebar">
@@ -201,22 +213,31 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
           <>
             <div className="sidebar-section-title">
               <span>✨ Spaces</span>
-              <button id="create-channel-btn" className="sidebar-section-btn" onClick={onCreateRoom} title="Create space">+</button>
+              {isAdmin && (
+                <button id="create-channel-btn" className="sidebar-section-btn" onClick={onCreateRoom} title="Create space">+</button>
+              )}
             </div>
-            {filteredChannels.length === 0 && <div className="sidebar-empty">No spaces yet — create one ✦</div>}
-            {filteredChannels.map(room => (
-              <div
-                key={room.id}
-                id={`channel-${room.id}`}
-                className={`channel-item ${activeRoomId === room.id ? 'active' : ''}`}
-                onClick={() => onRoomSelect(room.id)}
-                title={room.description || room.name}
-              >
-                <span className="channel-icon">{channelIcon(room.name)}</span>
-                <span className="channel-name">{room.name}</span>
-                {unread[room.id] > 0 && <span className="channel-badge">{unread[room.id]}</span>}
-              </div>
-            ))}
+            {filteredChannels.length === 0 && <div className="sidebar-empty">No spaces yet</div>}
+            {filteredChannels.map(room => {
+              const vmembers = voiceChannelMembers[room.id] || [];
+              return (
+                <div
+                  key={room.id}
+                  id={`channel-${room.id}`}
+                  className={`channel-item ${activeRoomId === room.id ? 'active' : ''}`}
+                  onClick={() => onRoomSelect(room.id)}
+                  title={room.description || room.name}
+                >
+                  <span className="channel-icon">{channelIcon(room.name)}</span>
+                  <span className="channel-name">{room.name}</span>
+                  <span className="channel-occupancy" title={room.max_members ? `Limit ${room.max_members}` : 'Unlimited'}>
+                    {occupancyOf(room)}
+                  </span>
+                  {vmembers.length > 0 && <span className="voice-count" title={`${vmembers.length} in call`}>🔊{vmembers.length}</span>}
+                  {unread[room.id] > 0 && <span className="channel-badge">{unread[room.id]}</span>}
+                </div>
+              );
+            })}
             {filteredChannels.map(() => null)}
           </>
         )}
@@ -227,7 +248,7 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
           <button id="sidebar-admin-btn" className="icon-btn" onClick={onOpenAdmin} title="Admin dashboard">🛡️</button>
         )}
         {currentChannelId && (
-          <button id="sidebar-mute-btn" className={`icon-btn ${isMuted ? 'danger' : ''}`} onClick={(e) => { e.stopPropagation(); toggleMute(); }} title={isMuted ? 'Unmute' : 'Mute'}>
+          <button id="sidebar-mute-btn" className={`icon-btn ${isMuted ? 'danger' : ''}`} onClick={(e) => { e.stopPropagation(); toggleMute(); }} title={voiceMuted ? 'Voice-muted by admin (listen only)' : isMuted ? 'Unmute' : 'Mute'}>
             {isMuted ? '🔇' : '🎙️'}
           </button>
         )}

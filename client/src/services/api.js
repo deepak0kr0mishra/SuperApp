@@ -72,6 +72,10 @@ export const api = {
   getUser: (id) => request('GET', `/users/${id}`),
   getReactionFavorites: () => request('GET', '/users/me/reaction-favorites'),
   setReactionFavorites: (favs) => request('PUT', '/users/me/reaction-favorites', { favs }),
+  myMutes: () => request('GET', '/users/me/mutes'),
+  myBlocks: () => request('GET', '/users/me/blocks'),
+  blockUser: (targetUserId) => request('POST', '/users/block', { targetUserId }),
+  unblockUser: (targetUserId) => request('DELETE', `/users/block/${targetUserId}`),
 
   // Admin
   adminStats: () => request('GET', '/admin/stats'),
@@ -96,6 +100,11 @@ export const api = {
   adminCreateVoice: (name, description) => request('POST', '/admin/voice', { name, description }),
   adminRenameVoice: (id, patch) => request('PATCH', `/admin/voice/${id}`, patch),
   adminDeleteVoice: (id) => request('DELETE', `/admin/voice/${id}`),
+  adminGetMutes: () => request('GET', '/admin/mutes'),
+  adminMuteUser: (userId, kind, duration, reason) =>
+    request('POST', '/admin/mutes', { userId, kind, duration, reason }),
+  adminUnmuteUser: (userId, kind) => request('DELETE', `/admin/mutes/${userId}/${kind}`),
+  adminRemoveMember: (roomId, userId) => request('DELETE', `/admin/rooms/${roomId}/members/${userId}`),
 
   // Rooms
   getRooms: () => request('GET', '/rooms'),
@@ -118,6 +127,10 @@ export const api = {
 
   // Voice channels (persistent list)
   getVoiceChannels: () => request('GET', '/voice'),
+
+  // Watch together (one shared YouTube video per room)
+  getWatch: (roomId) => request('GET', `/rooms/${roomId}/watch`),
+  setWatch: (roomId, payload) => request('PUT', `/rooms/${roomId}/watch`, payload),
 
   // Files
   uploadFile: async (file, roomId, onProgress) => {

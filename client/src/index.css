@@ -1966,3 +1966,251 @@ audio::-webkit-media-controls-panel { background: var(--bg-elevated); }
   .admin-stats-grid { grid-template-columns: 1fr 1fr; }
   .channel-item, .dm-item { padding-left: 10px; padding-right: 10px; }
 }
+
+/* --- Rooms overhaul: occupancy, call bar, watch together, mutes/blocks --- */
+.channel-occupancy { font-size: 11px; color: var(--text-muted); background: var(--bg-overlay); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; margin-left: auto; white-space: nowrap; }
+.channel-item .voice-count { margin-left: 6px; }
+.room-call-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg-overlay); }
+.room-call-info { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 0; flex-wrap: wrap; }
+.room-call-count { font-weight: 700; }
+.room-call-live { color: var(--success); font-weight: 700; }
+.room-call-muted { color: var(--danger); font-weight: 700; }
+.btn-join-call { background: linear-gradient(135deg, #22c55e, #16a34a); color: #fff; border: none; border-radius: 999px; padding: 12px 22px; font-size: 14px; font-weight: 800; cursor: pointer; min-height: 44px; box-shadow: 0 4px 14px rgba(34,197,94,.35); }
+.btn-join-call:hover { filter: brightness(1.06); }
+.btn-join-call.in-call { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 14px rgba(239,68,68,.35); }
+.btn-join-call:disabled { opacity: .6; cursor: wait; }
+.watch-card { border-top: 1px solid var(--border); background: var(--bg-overlay); padding: 10px 14px; }
+.watch-header { display: flex; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 800; margin-bottom: 8px; }
+.watch-actions { display: flex; gap: 6px; }
+.watch-player { position: relative; width: 100%; aspect-ratio: 16/9; border-radius: 12px; overflow: hidden; background: #000; }
+.watch-player iframe { width: 100%; height: 100%; border: 0; }
+.watch-empty { font-size: 12px; color: var(--text-muted); padding: 10px 2px; }
+.watch-form { display: flex; gap: 8px; margin-top: 8px; }
+.watch-form .form-input { flex: 1; }
+.mute-notice { background: rgba(239,68,68,.1); border: 1px solid var(--danger); color: var(--danger); border-radius: 10px; padding: 10px 12px; font-size: 12px; font-weight: 600; margin: 8px 12px; }
+.member-admin-actions { display: flex; gap: 4px; margin-left: auto; }
+.member-admin-actions .btn-mini { padding: 4px 8px; min-height: 28px; font-size: 12px; }
+@media (max-width: 820px) {
+  .room-call-bar { padding: 8px 10px; }
+  .btn-join-call { padding: 10px 16px; font-size: 13px; }
+  .channel-occupancy { font-size: 10px; padding: 1px 6px; }
+}
+
+/* ═══════════════════════════════════════════════════
+   THEME POLISH — TeaChat refinement pass
+   CSS-only, variable-driven (works in light + dark).
+   ═══════════════════════════════════════════════════ */
+
+/* --- 1. No layout shift on active rows (inset ring instead of border) --- */
+.channel-item.active,
+.dm-item.active,
+.voice-channel-item.in-channel {
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-brand);
+}
+.channel-item.active { background: var(--brand-gradient-subtle); }
+.voice-channel-item.in-channel {
+  background: rgba(61,139,79,0.08);
+  box-shadow: inset 0 0 0 1px rgba(61,139,79,0.35);
+}
+
+/* --- 2. Keyboard focus rings (replaces bare outline:none) --- */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.form-input:focus-visible,
+.sidebar-filter-input:focus-visible,
+.input-box textarea:focus-visible {
+  outline: none; /* these already have a soft glow ring */
+}
+.icon-btn:focus-visible,
+.btn-mini:focus-visible,
+.send-btn:focus-visible,
+.input-action-btn:focus-visible {
+  outline-offset: 1px;
+}
+
+/* --- 3. Messages: hover wash, tabular times, accent senders --- */
+.message-row:hover { background: var(--glass-bg); }
+.message-content { transition: box-shadow var(--transition-fast), transform var(--transition-fast); }
+.message-row:hover .message-content { box-shadow: var(--shadow-md); }
+.message-time { font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+.message-sender { color: var(--text-accent); }
+.message-row.mine .message-content {
+  background: linear-gradient(135deg, #f0c063 0%, var(--bubble-self) 45%, #dfa03f 100%);
+}
+[data-theme="dark"] .message-row.mine .message-content {
+  background: linear-gradient(135deg, #d99a3d 0%, var(--bubble-self) 50%, #a86e1f 100%);
+}
+
+/* --- 4. Sidebar: livelier hover, glowing unread badges --- */
+.channel-item:hover, .dm-item:hover { transform: translateX(2px); }
+.channel-item, .dm-item { transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast); }
+.channel-badge {
+  box-shadow: 0 0 0 3px rgba(192,57,43,0.15), 0 2px 6px rgba(192,57,43,0.4);
+  font-variant-numeric: tabular-nums;
+}
+.channel-occupancy { font-variant-numeric: tabular-nums; }
+.sidebar-tab { transition: color var(--transition-fast), background var(--transition-fast); }
+.sidebar-tab.active { box-shadow: inset 0 -2px 0 var(--brand-primary); }
+
+/* --- 5. Buttons: consistent motion + press states --- */
+.icon-btn { transition: color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast); }
+.icon-btn:hover { transform: translateY(-1px); }
+.icon-btn:active { transform: translateY(0) scale(0.96); }
+.btn-ghost { transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast); }
+.btn-ghost:hover { transform: translateY(-1px); }
+.btn-ghost:active { transform: translateY(0) scale(0.98); }
+.btn-ghost.danger:hover { background: rgba(192,57,43,0.1); border-color: var(--danger); color: var(--danger); }
+.btn-join-call { transition: filter var(--transition-base), transform var(--transition-base), box-shadow var(--transition-base); }
+.btn-join-call:hover { filter: brightness(1.07); transform: translateY(-1px); box-shadow: 0 8px 22px rgba(34,197,94,.45); }
+.btn-join-call.in-call:hover { box-shadow: 0 8px 22px rgba(239,68,68,.45); }
+.btn-join-call:active { transform: translateY(0) scale(0.98); }
+.btn-join-call:disabled { opacity: .65; cursor: wait; transform: none; }
+.send-btn { transition: transform var(--transition-fast), opacity var(--transition-fast), background var(--transition-fast); }
+.send-btn:not(:disabled):hover { transform: scale(1.08) rotate(-8deg); }
+.send-btn:not(:disabled):active { transform: scale(0.94); }
+.pill-btn { transition: background var(--transition-fast), transform var(--transition-fast); }
+.pill-btn:active { transform: scale(0.94); }
+
+/* --- 6. Chips: crisp micro-labels --- */
+.code-chip, .admin-chip {
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-sm);
+}
+.admin-chip {
+  background: var(--brand-gradient-subtle);
+  border-color: var(--border-brand);
+}
+.member-count, .channel-occupancy { font-variant-numeric: tabular-nums; }
+
+/* --- 7. Avatars + presence dots --- */
+.avatar { box-shadow: var(--shadow-sm), inset 0 0 0 1px rgba(255,255,255,0.25); }
+.status-dot { box-shadow: 0 0 0 2px var(--bg-surface); }
+
+/* --- 8. Toasts: glassy, colored glow per type --- */
+.toast {
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.toast.success { box-shadow: var(--shadow-md), 0 0 18px rgba(61,139,79,0.25); }
+.toast.error { box-shadow: var(--shadow-md), 0 0 18px rgba(192,57,43,0.3); }
+.toast.info { box-shadow: var(--shadow-md), 0 0 18px rgba(47,127,163,0.3); }
+
+/* --- 9. Modals + auth: soft brand halo --- */
+.modal { box-shadow: var(--shadow-lg), 0 0 0 1px var(--border-subtle), 0 0 60px rgba(176,106,31,0.12); }
+.auth-card {
+  position: relative;
+  box-shadow: var(--shadow-lg), 0 0 80px rgba(176,106,31,0.15);
+}
+.auth-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 24px; right: 24px;
+  height: 3px;
+  border-radius: 0 0 999px 999px;
+  background: var(--brand-gradient);
+}
+
+/* --- 10. Room call bar + watch card: hairline gradient separators --- */
+.room-call-bar {
+  border-bottom: none;
+  position: relative;
+}
+.room-call-bar::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-brand) 20%, var(--border-brand) 80%, transparent);
+}
+.watch-card { border-top: 1px solid var(--border-subtle); }
+.watch-player {
+  box-shadow: var(--shadow-md), 0 0 0 1px var(--border-default);
+  transition: box-shadow var(--transition-base);
+}
+.watch-player:hover { box-shadow: var(--shadow-lg), 0 0 0 1px var(--border-brand); }
+.mute-notice { border-left-width: 3px; }
+
+/* --- 11. Scrollbars: easier to grab on desktop --- */
+@media (hover: hover) and (pointer: fine) {
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+}
+
+/* --- 12. Empty states: softer, centered rhythm --- */
+.sidebar-empty, .voice-panel-empty, .watch-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.empty-chat-icon { filter: drop-shadow(0 8px 20px rgba(176,106,31,0.35)); }
+
+/* --- 13. Dark-mode tune-ups for new surfaces --- */
+[data-theme="dark"] .modal { box-shadow: var(--shadow-lg), 0 0 0 1px var(--border-subtle), 0 0 60px rgba(0,0,0,0.5); }
+[data-theme="dark"] .auth-card { box-shadow: var(--shadow-lg), 0 0 80px rgba(0,0,0,0.55); }
+[data-theme="dark"] .channel-badge { box-shadow: 0 0 0 3px rgba(224,96,79,0.18), 0 2px 8px rgba(0,0,0,0.5); }
+[data-theme="dark"] .btn-join-call { box-shadow: 0 4px 16px rgba(0,0,0,0.5), 0 0 20px rgba(34,197,94,0.25); }
+[data-theme="dark"] .message-row.mine .message-time { color: rgba(36, 21, 3, 0.75); }
+
+/* --- 14. Respect reduced motion --- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .aurora-bg { display: none; }
+}
+
+/* ═══════════════════════════════════════════════════
+   MOBILE FIX — logout/footer pushed off-screen + touch polish
+   Root cause: flex column children with overflow need min-height: 0
+   or long chat lists push the drawer footer (logout) out of view.
+   ═══════════════════════════════════════════════════ */
+
+/* --- The actual logout fix: let scroll areas shrink --- */
+.sidebar-content { min-height: 0; }
+.message-list { min-height: 0; }
+.sidebar-user { flex-shrink: 0; }
+.sidebar-header, .sidebar-tabs, .sidebar-filter { flex-shrink: 0; }
+
+/* --- Phone drawer footer: big touch targets, always reachable --- */
+@media (max-width: 820px) {
+  .sidebar-user-actions {
+    padding: 8px 10px 4px;
+    gap: 6px;
+  }
+  .sidebar-user-actions .icon-btn {
+    width: 44px;
+    height: 44px;
+    font-size: 19px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+  }
+  .sidebar-user-actions .icon-btn:active { transform: scale(0.93); }
+  #sidebar-logout-btn {
+    border-color: rgba(192,57,43,0.4);
+    color: var(--danger);
+    background: rgba(192,57,43,0.08);
+  }
+  .sidebar-user {
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  }
+  /* Compact call bar + comfy rows on small phones */
+  .btn-join-call { padding: 10px 16px; font-size: 13px; min-height: 44px; }
+  .room-call-bar { gap: 8px; padding: 8px 10px; }
+  .room-call-info { font-size: 11px; }
+  .channel-item, .dm-item { padding-top: 8px; padding-bottom: 8px; }
+  .channel-occupancy { font-size: 10px; }
+  /* Watch card fits narrow screens */
+  .watch-form { gap: 6px; }
+  .watch-form .btn-mini { min-height: 44px; }
+  /* Keep member admin buttons tappable */
+  .member-admin-actions .btn-mini { min-height: 36px; padding: 6px 10px; }
+}

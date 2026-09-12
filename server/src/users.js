@@ -1,5 +1,5 @@
 import express from 'express';
-import { userQueries, favQueries, DEFAULT_REACTION_FAVS, MAX_REACTION_FAVS } from './db.js';
+import { userQueries, favQueries, DEFAULT_REACTION_FAVS, MAX_REACTION_FAVS, blockQueries, muteQueries, getActiveMute, isFixedAdmin } from './db.js';
 import { authenticateToken } from './auth.js';
 
 const router = express.Router();
@@ -49,6 +49,49 @@ router.get('/me', authenticateToken, (req, res) => {
   const user = userQueries.findById.get(req.user.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
   res.json({ user });
+});
+
+// GET /api/users/me/mutes — my active mutes (voice/chat + expiry)
+router.get('/me/mutes', authenticateToken, (req, res) => {
+  try {
+    const mutes = muteQueries.listFor.all(req.user.userId);
+    res.json({ mutes });
+  } catch {
+    res.json({ mutes: [] });
+  }
+});
+
+// GET /api/users/me/blocks — users I blocked
+router.get('/me/blocks', authenticateToken, (req, res) => {
+  try {
+    res.json({ blocks: blockQueries.myBlocks.all(req.user.userId) });
+  } catch {
+    res.json({ blocks: [] });
+  }
+});
+
+// POST /api/users/block — { targetUserId } (admins can't be blocked)
+router.post('/block', authenticateToken, (req, res) => {
+  const { targetUserId } = req.body || {};
+  if (!targetUserId) return res.status(400).json({ error: 'Target user required' });
+  if (targetUserId === req.user.userId) return res.status(400).json({ error: 'You cannot block yourself' });
+  const target = userQueries.findById.get(targetUserId);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.role === 'admin' || isFixedAdmin(target)) {
+    return res.status(400).json({ error: 'Admins cannot be blocked' });
+  }
+  try {
+    blockQueries.add.run(req.user.userId, targetUserId);
+  } catch {}
+  res.json({ success: true });
+});
+
+// DELETE /api/users/block/:targetUserId — unblock
+router.delete('/block/:targetUserId', authenticateToken, (req, res) => {
+  try {
+    blockQueries.remove.run(req.user.userId, req.params.targetUserId);
+  } catch {}
+  res.json({ success: true });
 });
 
 // GET /api/users/search?q=... — search by username, display_name, user_code, UID, or email

@@ -5,6 +5,7 @@ export const useVoiceStore = create((set, get) => ({
   currentChannelId: null,
   isMuted: false,
   isConnecting: false,
+  voiceMuted: null, // { expires_at, reason } when admin voice-mutes me (listen-only)
   peerStreams: {}, // userId → MediaStream
   speakingUsers: new Set(), // Set of userIds currently speaking
   voiceChannelMembers: {}, // channelId → [userId]
@@ -17,7 +18,7 @@ export const useVoiceStore = create((set, get) => ({
       get().leaveVoiceChannel();
     }
 
-    set({ isConnecting: true, error: null });
+    set({ isConnecting: true, error: null, voiceMuted: null });
 
     try {
       await webRTCManager.joinVoiceChannel(channelId, {
@@ -70,15 +71,28 @@ export const useVoiceStore = create((set, get) => ({
       currentChannelId: null,
       isMuted: false,
       isConnecting: false,
+      voiceMuted: null,
       peerStreams: {},
       speakingUsers: new Set(),
     });
   },
 
   toggleMute: () => {
+    // Admin voice-mute (level 1): listen-only, cannot unmute until expiry/revoke.
+    if (get().voiceMuted) return true;
     const muted = webRTCManager.toggleMute();
     set({ isMuted: muted });
     return muted;
+  },
+
+  // Server says I am voice-muted: force local mic off + lock it.
+  applyVoiceMute: (info) => {
+    try {
+      if (webRTCManager.localStream && !webRTCManager.isMuted) {
+        webRTCManager.toggleMute();
+      }
+    } catch {}
+    set({ voiceMuted: info || { expires_at: 0 }, isMuted: true });
   },
 
   setPeerSpeaking: (userId, speaking) => set(state => {

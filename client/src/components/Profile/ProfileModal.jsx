@@ -22,6 +22,8 @@ export default function ProfileModal({ userId, onClose, onStartDM }) {
   const [loadingPeer, setLoadingPeer] = useState(!isSelf);
   const [peerError, setPeerError] = useState('');
   const [startingDM, setStartingDM] = useState(false);
+  const [blockMsg, setBlockMsg] = useState('');
+  const [blocked, setBlocked] = useState(false);
 
   const [displayName, setDisplayName] = useState(me?.display_name || '');
   const [bio, setBio] = useState(me?.bio || '');
@@ -48,6 +50,9 @@ export default function ProfileModal({ userId, onClose, onStartDM }) {
     api.getUser(userId)
       .then(({ user }) => { if (!cancelled) { setPeer(user); setLoadingPeer(false); } })
       .catch(() => { if (!cancelled) { if (!cached) setPeerError('Could not load profile'); setLoadingPeer(false); } });
+    api.myBlocks().then(({ blocks }) => {
+      if (!cancelled && Array.isArray(blocks)) setBlocked(blocks.some((b) => b.id === userId));
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, [userId, isSelf]);
 
@@ -108,6 +113,28 @@ export default function ProfileModal({ userId, onClose, onStartDM }) {
   if (!isSelf) {
     const u = peer;
     const status = u ? (userStatuses[u.id] || u.status || 'offline') : 'offline';
+    const canBlock = u && u.role !== 'admin';
+    const handleBlock = async () => {
+      setBlockMsg('');
+      try {
+        if (blocked) {
+          await api.unblockUser(u.id);
+          setBlocked(false);
+          setBlockMsg('Unblocked ✦');
+        } else {
+          if (!confirm(`Block ${u.display_name || u.username}? They can't DM you anymore.`)) return;
+          await api.blockUser(u.id);
+          setBlocked(true);
+          setBlockMsg('Blocked — they can no longer DM you');
+        }
+        api.myBlocks().then(({ blocks }) => {
+          useChatStore.getState().setMyBlocks(blocks || []);
+        }).catch(() => {});
+      } catch (err) {
+        setBlockMsg(err.message || 'Block failed');
+      }
+      setTimeout(() => setBlockMsg(''), 3000);
+    };
     return (
       <div className="modal-overlay" onClick={onClose}>
         <div className="modal profile-modal" onClick={e => e.stopPropagation()}>
@@ -145,7 +172,13 @@ export default function ProfileModal({ userId, onClose, onStartDM }) {
                   {startingDM ? 'Opening chat…' : `💬 Chat with ${u.display_name || u.username}`}
                 </button>
                 <button className="btn-ghost" onClick={() => copyCode(u)}>{copied ? '✓ Copied!' : `⧉ Copy UID ${u.uid || u.user_code || ''}`}</button>
+                {canBlock && (
+                  <button className="btn-ghost danger" onClick={handleBlock}>
+                    {blocked ? '🔓 Unblock' : '⛔ Block'}
+                  </button>
+                )}
               </div>
+              {blockMsg && <div className="profile-msg">{blockMsg}</div>}
               {peerError && <div className="form-error" style={{ marginTop: 10 }}>{peerError}</div>}
             </>
           )}

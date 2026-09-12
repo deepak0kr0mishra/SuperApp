@@ -1,6 +1,10 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { roomQueries, userQueries, messageQueries, readQueries } from './db.js';
+import {
+  roomQueries, userQueries, messageQueries, readQueries,
+  muteQueries, getActiveMute, blockQueries, isDMBlocked,
+  watchQueries, extractYouTubeId, isFixedAdmin,
+} from './db.js';
 import { authenticateToken } from './auth.js';
 import { messageLimiter } from './security.js';
 
@@ -16,6 +20,21 @@ export function canAccessRoom(userId, roomId) {
   return { ok: true, room };
 }
 
+// Room is full (admins bypass + don't take spots). DMs never have limits.
+export function roomFullError(room, userId) {
+  if (!room || room.type === 'dm' || room.max_members == null) return null;
+  try {
+    const me = userQueries.findById.get(userId);
+    if (me?.role === 'admin') return null; // admins join even when full
+    const count = roomQueries.countOccupants.get(room.id)?.c ?? 0;
+    const already = roomQueries.isMember.get(room.id, userId);
+    if (!already && count >= room.max_members) {
+      return `Room is full (${count}/${room.max_members})`;
+    }
+  } catch {}
+  return null;
+}
+
 // GET /api/rooms — list all rooms user belongs to + all public channels
 router.get('/', authenticateToken, (req, res) => {
   const allRooms = roomQueries.findAll.all();
@@ -25,10 +44,15 @@ router.get('/', authenticateToken, (req, res) => {
   } catch {}
   const rooms = allRooms.map((r) => {
     let unread = 0;
+    let memberCount = 0;
     try {
       unread = messageQueries.unreadCount.get(req.user.userId, r.id, req.user.userId)?.c ?? 0;
     } catch {}
-    return { ...r, unread, last_read_at: reads[r.id] ?? 0 };
+    try {
+      // Occupancy counts regular members (admin staff don't take spots).
+      memberCount = roomQueries.countOccupants.get(r.id)?.c ?? 0;
+    } catch {}
+    return { ...r, unread, last_read_at: reads[r.id] ?? 0, memberCount };
   });
   res.json({ rooms });
 });
@@ -76,6 +100,13 @@ router.post('/dm', authenticateToken, (req, res) => {
   const myId = req.user.userId;
   const target = userQueries.findById.get(targetUserId);
   if (!target) return res.status(404).json({ error: 'User not found' });
+  // Block check (either direction blocks a new DM). Admins can't be blocked,
+  // but that is enforced at block-time — here we just honor existing rows.
+  try {
+    if (isDMBlocked(myId, targetUserId)) {
+      return res.status(403).json({ error: 'Cannot start this chat (blocked)' });
+    }
+  } catch {}
 
   // Find existing DM
   const allRooms = roomQueries.findAll.all();
@@ -98,6 +129,7 @@ router.post('/dm', authenticateToken, (req, res) => {
     name: `${me.username}-${target.username}`,
     description: 'Direct message',
     type: 'dm',
+    max_members: null,
     created_by: myId,
   });
   roomQueries.addMember.run(id, myId);
@@ -115,8 +147,12 @@ router.get('/:id/members', authenticateToken, (req, res) => {
   res.json({ members });
 });
 
-// POST /api/rooms — create new room (channel)
+// POST /api/rooms — fixed 5-space layout: only admins may create extra spaces
 router.post('/', authenticateToken, messageLimiter, (req, res) => {
+  const me = userQueries.findById.get(req.user.userId);
+  if (!me || me.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admins can create spaces' });
+  }
   const { name, description, type } = req.body;
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Room name required' });
   if (String(name).length > 40) return res.status(400).json({ error: 'Room name too long (max 40)' });
@@ -128,6 +164,7 @@ router.post('/', authenticateToken, messageLimiter, (req, res) => {
     name: String(name).toLowerCase().replace(/\s+/g, '-').slice(0, 40),
     description: String(description || '').slice(0, 200),
     type: type || 'channel',
+    max_members: null,
     created_by: req.user.userId,
   });
   roomQueries.addMember.run(id, req.user.userId);
@@ -144,6 +181,9 @@ router.post('/:id/join', authenticateToken, (req, res) => {
     // DMs are invite-only: only existing members can re-join, never strangers.
     const member = roomQueries.isMember.get(req.params.id, req.user.userId);
     if (!member) return res.status(403).json({ error: 'DMs are private' });
+  } else {
+    const full = roomFullError(room, req.user.userId);
+    if (full) return res.status(403).json({ error: full });
   }
   roomQueries.addMember.run(req.params.id, req.user.userId);
   res.json({ success: true });
@@ -153,6 +193,42 @@ router.post('/:id/join', authenticateToken, (req, res) => {
 router.delete('/:id/leave', authenticateToken, (req, res) => {
   roomQueries.removeMember.run(req.params.id, req.user.userId);
   res.json({ success: true });
+});
+
+// --- Watch together (YouTube, one shared video per room) ---
+// GET /api/rooms/:id/watch — current video + playback state
+router.get('/:id/watch', authenticateToken, (req, res) => {
+  const access = canAccessRoom(req.user.userId, req.params.id);
+  if (!access.ok) return res.status(access.status).json({ error: access.error });
+  try {
+    const state = watchQueries.get.get(req.params.id);
+    res.json({ watch: state || { room_id: req.params.id, video_id: '', url: '', is_playing: 0, position: 0 } });
+  } catch {
+    res.json({ watch: { room_id: req.params.id, video_id: '', url: '', is_playing: 0, position: 0 } });
+  }
+});
+
+// PUT /api/rooms/:id/watch — set video / playback state (any member; validated)
+router.put('/:id/watch', authenticateToken, (req, res) => {
+  const access = canAccessRoom(req.user.userId, req.params.id);
+  if (!access.ok) return res.status(access.status).json({ error: access.error });
+  const { url, videoId, is_playing, position } = req.body || {};
+  const raw = String(videoId || url || '').slice(0, 500);
+  if (!raw) {
+    // Empty = clear the player
+    try { watchQueries.clear.run(req.params.id); } catch {}
+    return res.json({ watch: { room_id: req.params.id, video_id: '', url: '', is_playing: 0, position: 0 } });
+  }
+  const video_id = extractYouTubeId(raw);
+  if (!video_id) return res.status(400).json({ error: 'Send a valid YouTube link or 11-char video id' });
+  const playing = is_playing ? 1 : 0;
+  const pos = Math.max(0, Math.min(Number(position) || 0, 86400));
+  try {
+    watchQueries.set.run(req.params.id, video_id, `https://www.youtube.com/watch?v=${video_id}`, playing, pos, req.user.userId);
+    res.json({ watch: watchQueries.get.get(req.params.id) });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not save watch state' });
+  }
 });
 
 export default router;

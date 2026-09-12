@@ -92,10 +92,11 @@ router.post('/register', authLimiter, async (req, res) => {
       role,
     });
 
-    // Auto-join all default channels
+    // Auto-join unlimited spaces only (general). Limited rooms
+    // (Developers/Creatives/Chill) are joined explicitly, honoring caps.
     const allRooms = roomQueries.findAll.all();
     for (const room of allRooms) {
-      if (room.type === 'channel') {
+      if (room.type === 'channel' && room.max_members == null) {
         roomQueries.addMember.run(room.id, id);
       }
     }

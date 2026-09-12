@@ -1,5 +1,5 @@
 import express from 'express';
-import { voiceChannelQueries } from './db.js';
+import { voiceChannelQueries, roomQueries, userQueries, getActiveMute } from './db.js';
 import { authenticateToken } from './auth.js';
 
 // Public REST: list persistent voice channels (admin manages via /api/admin/voice)
@@ -23,8 +23,31 @@ export function setupVoiceSignaling(io, authenticatedSockets) {
     socket.on('voice:join', ({ channelId }) => {
       if (!socket.userId) return;
 
+      // Capacity mirrors the chat room limit (voice id == room id for spaces).
+      // Admins bypass full rooms; voice-mute still joins (listen-only).
+      // Admin staff don't take member spots.
+      try {
+        const room = roomQueries.findById.get(channelId);
+        if (room && room.type === 'channel' && room.max_members != null) {
+          const me = userQueries.findById.get(socket.userId);
+          const isAdmin = me?.role === 'admin';
+          if (!isAdmin) {
+            const count = roomQueries.countOccupants.get(channelId)?.c ?? 0;
+            const already = roomQueries.isMember.get(channelId, socket.userId);
+            const inVoice = voiceChannels.get(channelId)?.has(socket.userId);
+            if (!already && !inVoice && count >= room.max_members) {
+              socket.emit('error', { message: `Voice room is full (${count}/${room.max_members})` });
+              return;
+            }
+          }
+        }
+      } catch {}
+
       // Leave any existing voice channel first
       leaveAllVoiceChannels(socket, io);
+
+      // Joining voice also joins the text room (same capacity rule already passed).
+      try { roomQueries.addMember.run(channelId, socket.userId); } catch {}
 
       if (!voiceChannels.has(channelId)) {
         voiceChannels.set(channelId, new Map());
@@ -46,6 +69,19 @@ export function setupVoiceSignaling(io, authenticatedSockets) {
           socketId: channel.get(uid),
         })),
       });
+
+      // Voice-mute (level 1): join OK but stay listen-only until expiry/revoke.
+      try {
+        const vm = getActiveMute(socket.userId, 'voice');
+        if (vm) {
+          socket.emit('voice:muted', {
+            channelId,
+            kind: 'voice',
+            expires_at: vm.expires_at,
+            reason: vm.reason || '',
+          });
+        }
+      } catch {}
 
       // Tell existing peers about the new user
       socket.to(`voice:${channelId}`).emit('voice:peer_joined', {

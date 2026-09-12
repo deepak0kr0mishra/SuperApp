@@ -1,7 +1,7 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import { userQueries, roomQueries, messageQueries, reportQueries, voiceChannelQueries, isFixedAdmin, MAX_ADMINS } from './db.js';
+import { userQueries, roomQueries, messageQueries, reportQueries, voiceChannelQueries, isFixedAdmin, MAX_ADMINS, muteQueries, getActiveMute, MUTE_KINDS, MUTE_DURATIONS, blockQueries } from './db.js';
 import db from './db.js';
 import { authenticateToken } from './auth.js';
 import { validatePassword } from './security.js';
@@ -161,6 +161,8 @@ router.delete('/users/:id', (req, res) => {
   db.prepare('DELETE FROM messages WHERE sender_id = ?').run(req.params.id);
   db.prepare('DELETE FROM room_members WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM files WHERE uploader_id = ?').run(req.params.id);
+  try { db.prepare('DELETE FROM user_mutes WHERE user_id = ?').run(req.params.id); } catch {}
+  try { db.prepare('DELETE FROM user_blocks WHERE blocker_id = ? OR blocked_id = ?').run(req.params.id, req.params.id); } catch {}
   userQueries.deleteById.run(req.params.id);
   res.json({ success: true });
 });
@@ -178,25 +180,29 @@ router.get('/rooms', (req, res) => {
 
 // POST /api/admin/rooms — create channel (admin)
 router.post('/rooms', (req, res) => {
-  const { name, description } = req.body;
+  const { name, description, max_members } = req.body;
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name required' });
   const id = uuidv4();
+  const limit = max_members === null || max_members === undefined || max_members === ''
+    ? null
+    : Math.max(2, Math.min(Number(max_members) || 0, 100)) || null;
   roomQueries.create.run({
     id,
     name: String(name).toLowerCase().replace(/\s+/g, '-').slice(0, 40),
     description: String(description || '').slice(0, 200),
     type: 'channel',
+    max_members: limit,
     created_by: req.user.userId,
   });
   roomQueries.addMember.run(id, req.user.userId);
   res.status(201).json({ room: roomQueries.findById.get(id) });
 });
 
-// PATCH /api/admin/rooms/:id — rename channel
+// PATCH /api/admin/rooms/:id — rename channel (+ optional member limit)
 router.patch('/rooms/:id', (req, res) => {
   const room = roomQueries.findById.get(req.params.id);
   if (!room) return res.status(404).json({ error: 'Room not found' });
-  const { name, description } = req.body;
+  const { name, description, max_members } = req.body;
   if (name !== undefined) {
     if (!String(name).trim()) return res.status(400).json({ error: 'Name cannot be empty' });
     if (String(name).length > 40) return res.status(400).json({ error: 'Name too long' });
@@ -206,18 +212,79 @@ router.patch('/rooms/:id', (req, res) => {
     description === undefined ? null : String(description).slice(0, 200),
     req.params.id
   );
+  if (max_members !== undefined && room.type === 'channel') {
+    const limit = max_members === null || max_members === '' ? null
+      : Math.max(2, Math.min(Number(max_members) || 0, 100)) || null;
+    try { roomQueries.setLimit.run(limit, req.params.id); } catch {}
+  }
   res.json({ room: roomQueries.findById.get(req.params.id) });
 });
 
 // DELETE /api/admin/rooms/:id
 router.delete('/rooms/:id', (req, res) => {
-  const protectedIds = ['general', 'media', 'audio', 'random'];
+  const protectedIds = ['general', 'developers', 'creatives', 'chill-01', 'chill-02'];
   if (protectedIds.includes(req.params.id)) {
-    return res.status(400).json({ error: 'Default channels cannot be deleted' });
+    return res.status(400).json({ error: 'Default spaces cannot be deleted' });
   }
   const room = roomQueries.findById.get(req.params.id);
   if (!room) return res.status(404).json({ error: 'Room not found' });
   roomQueries.delete.run(req.params.id);
+  res.json({ success: true });
+});
+
+// DELETE /api/admin/rooms/:id/members/:userId — remove anyone from a room
+router.delete('/rooms/:id/members/:userId', (req, res) => {
+  const room = roomQueries.findById.get(req.params.id);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  const target = userQueries.findById.get(req.params.userId);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (isFixedAdmin(target) && room.type === 'channel') {
+    return res.status(400).json({ error: 'Fixed admins cannot be removed from spaces' });
+  }
+  roomQueries.removeMember.run(req.params.id, req.params.userId);
+  res.json({ success: true });
+});
+
+// --- Timed mutes: voice (level 1, listen-only) + chat (level 2, DMs only) ---
+// GET /api/admin/mutes — active mutes with usernames
+router.get('/mutes', (req, res) => {
+  try { muteQueries.clearExpired.run(); } catch {}
+  let rows = [];
+  try { rows = muteQueries.listActive.all(); } catch {}
+  const mutes = rows.map((m) => {
+    let username = m.user_id;
+    try { username = userQueries.findById.get(m.user_id)?.username || m.user_id; } catch {}
+    return { ...m, username };
+  });
+  res.json({ mutes });
+});
+
+// POST /api/admin/mutes — { userId, kind: 'voice'|'chat', duration: 'hour'|'day'|'week', reason? }
+router.post('/mutes', (req, res) => {
+  const { userId, kind, duration, reason } = req.body || {};
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  if (!MUTE_KINDS.includes(kind)) return res.status(400).json({ error: 'kind must be voice or chat' });
+  if (!MUTE_DURATIONS[duration]) return res.status(400).json({ error: 'duration must be hour, day, or week' });
+  const target = userQueries.findById.get(userId);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.role === 'admin' || isFixedAdmin(target)) {
+    return res.status(400).json({ error: 'Admins cannot be muted' });
+  }
+  if (userId === req.user.userId) return res.status(400).json({ error: 'You cannot mute yourself' });
+  const expires_at = Math.floor(Date.now() / 1000) + MUTE_DURATIONS[duration];
+  try {
+    muteQueries.upsert.run(userId, kind, expires_at, req.user.userId, String(reason || '').slice(0, 200));
+  } catch (err) {
+    return res.status(500).json({ error: 'Could not apply mute' });
+  }
+  res.status(201).json({ mute: { user_id: userId, kind, expires_at, username: target.username } });
+});
+
+// DELETE /api/admin/mutes/:userId/:kind — revoke a mute early
+router.delete('/mutes/:userId/:kind', (req, res) => {
+  const { userId, kind } = req.params;
+  if (!MUTE_KINDS.includes(kind)) return res.status(400).json({ error: 'kind must be voice or chat' });
+  try { muteQueries.revoke.run(userId, kind); } catch {}
   res.json({ success: true });
 });
 
@@ -288,13 +355,14 @@ const BACKUP_VERSION = 1;
 const BACKUP_TABLES = [
   'users', 'rooms', 'room_members', 'messages', 'reactions',
   'files', 'reports', 'room_reads', 'voice_channels', 'reaction_favorites',
+  'user_mutes', 'user_blocks', 'room_watch',
 ];
 
 // Columns allowed per table on restore. Backup files are admin-supplied JSON,
 // so without this whitelist crafted column names would be interpolated into SQL.
 const BACKUP_COLUMNS = {
   users: ['id', 'username', 'display_name', 'password_hash', 'public_key', 'avatar_color', 'status', 'user_code', 'bio', 'role', 'created_at', 'email', 'uid', 'is_disabled'],
-  rooms: ['id', 'name', 'description', 'type', 'created_by', 'created_at'],
+  rooms: ['id', 'name', 'description', 'type', 'created_by', 'created_at', 'max_members'],
   room_members: ['room_id', 'user_id', 'joined_at'],
   messages: ['id', 'room_id', 'sender_id', 'encrypted_content', 'type', 'file_id', 'file_name', 'file_size', 'file_mime', 'reply_to', 'created_at', 'edited_at', 'content', 'updated_at', 'is_deleted', 'deleted_at'],
   reactions: ['message_id', 'user_id', 'emoji', 'created_at'],
@@ -303,6 +371,9 @@ const BACKUP_COLUMNS = {
   room_reads: ['room_id', 'user_id', 'last_read_at'],
   voice_channels: ['id', 'name', 'description', 'created_by', 'created_at'],
   reaction_favorites: ['user_id', 'favs', 'updated_at'],
+  user_mutes: ['user_id', 'kind', 'expires_at', 'created_by', 'reason', 'created_at'],
+  user_blocks: ['blocker_id', 'blocked_id', 'created_at'],
+  room_watch: ['room_id', 'video_id', 'url', 'is_playing', 'position', 'updated_at', 'set_by'],
 };
 
 // GET /api/admin/backup — download full JSON dump (admin only, see router.use)
@@ -367,7 +438,7 @@ router.post('/restore', (req, res) => {
     }
     const txn = db.transaction(() => {
       // Clear in dependency-safe order (children before parents; FKs are ON)
-      for (const t of ['reactions', 'room_reads', 'reports', 'messages', 'room_members', 'files', 'rooms', 'voice_channels', 'reaction_favorites']) {
+      for (const t of ['reactions', 'room_reads', 'reports', 'messages', 'room_members', 'room_watch', 'user_mutes', 'user_blocks', 'files', 'rooms', 'voice_channels', 'reaction_favorites']) {
         try { db.prepare(`DELETE FROM ${t}`).run(); } catch {}
       }
       // Users: delete all except none — full replace (fixed admins re-seeded
@@ -384,7 +455,7 @@ router.post('/restore', (req, res) => {
         db.prepare(`INSERT OR REPLACE INTO ${t} (${cols.join(',')}) VALUES (${ph})`).run(...cols.map(c => row[c]));
       };
       // Insert parents before children (FKs are ON)
-      for (const t of ['users', 'rooms', 'voice_channels', 'room_members', 'files', 'messages', 'reactions', 'reports', 'room_reads', 'reaction_favorites']) {
+      for (const t of ['users', 'rooms', 'voice_channels', 'room_members', 'files', 'messages', 'reactions', 'reports', 'room_reads', 'reaction_favorites', 'user_mutes', 'user_blocks', 'room_watch']) {
         for (const row of cleanRows[t]) insert(t, row);
       }
     });

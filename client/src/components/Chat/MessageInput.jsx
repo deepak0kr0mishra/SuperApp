@@ -56,7 +56,7 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
   const fileInputRef = useRef(null);
   const emojiRef = useRef(null);
 
-  const { rooms } = useChatStore();
+  const { rooms, myMutes } = useChatStore();
   const { startTyping, stopTyping } = useTypingIndicator(roomId);
 
   useEffect(() => {
@@ -159,6 +159,17 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
   };
 
   const activeRoom = rooms.find(r => r.id === roomId);
+  const chatMute = (myMutes || []).find(m => m.kind === 'chat');
+  const chatMuted = !!chatMute && activeRoom?.type !== 'dm';
+  const muteUntil = chatMute ? new Date(chatMute.expires_at * 1000).toLocaleString() : '';
+
+  if (chatMuted) {
+    return (
+      <div className="message-input-area">
+        <div className="mute-notice">🔇 You are muted from chatting until {muteUntil} — DMs still work.</div>
+      </div>
+    );
+  }
 
   return (
     <div className="message-input-area">
