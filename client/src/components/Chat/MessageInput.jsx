@@ -4,6 +4,7 @@ import { useAuthStore } from '../../stores/authStore.js';
 import { useChatStore } from '../../stores/chatStore.js';
 import { getSocket } from '../../services/socket.js';
 import { api } from '../../services/api.js';
+import { findYouTubeId } from '../../utils/youtube.js';
 
 // --- Typing indicator hook ---
 function useTypingIndicator(roomId) {
@@ -92,6 +93,19 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
         type: 'text',
         replyTo: replyTo?.id || null,
       });
+      // YouTube link in a space chat → same as Watch-together queue.
+      try {
+        const room = rooms.find((r) => r.id === roomId);
+        if (room && room.type !== 'dm') {
+          const vid = findYouTubeId(content);
+          if (vid) {
+            api.setWatch(roomId, { videoId: vid, is_playing: true, position: 0 }).then(({ watch }) => {
+              if (watch?.video_id) useChatStore.getState().setWatch(roomId, watch);
+            }).catch(() => {});
+            socket.emit('watch:set', { roomId, videoId: vid });
+          }
+        }
+      } catch {}
     } catch (err) {
       console.error('Send error:', err);
       setSendError('Failed to send. Try again.');

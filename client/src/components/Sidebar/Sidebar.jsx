@@ -40,7 +40,7 @@ function previewOf(msg) {
 
 export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM, onOpenSearch, onOpenProfile, onOpenAdmin, onRoomSelect }) {
   const { user, logout } = useAuthStore();
-  const { rooms, activeRoomId, unread, allUsers, userStatuses, members, messages, voiceChannels } = useChatStore();
+  const { rooms, activeRoomId, unread, allUsers, userStatuses, members, messages } = useChatStore();
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('teachat_theme') || 'light'; } catch { return 'light'; }
   });
@@ -53,7 +53,7 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
       document.documentElement.dataset.theme = next;
     } catch {}
   };
-  const { currentChannelId, voiceChannelMembers, speakingUsers, joinVoiceChannel, leaveVoiceChannel, isMuted, voiceMuted, toggleMute } = useVoiceStore();
+  const { currentChannelId, voiceChannelMembers, isMuted, voiceMuted, toggleMute } = useVoiceStore();
   const [filter, setFilter] = useState('');
 
   const channels = useMemo(() => rooms.filter(r => r.type === 'channel'), [rooms]);
@@ -104,14 +104,6 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
     : channels;
 
   const totalUnreadDMs = dms.reduce((n, r) => n + (unread[r.id] || 0), 0);
-
-  const handleVoiceJoin = async (channelId) => {
-    if (currentChannelId === channelId) leaveVoiceChannel();
-    else {
-      try { await joinVoiceChannel(channelId); }
-      catch (err) { console.error('Voice join error:', err); }
-    }
-  };
 
   const isAdmin = user?.role === 'admin';
 
@@ -188,22 +180,6 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
                       </span>
                       {unread[room.id] > 0 && <span className="channel-badge">{unread[room.id]}</span>}
                     </div>
-                  </div>
-                </div>
-              );
-            })}
-
-            {/* Voice stays reachable but collapsed under chats */}
-            <div className="sidebar-section-title" style={{ marginTop: 12 }}><span>🔊 Voice</span></div>
-            {(voiceChannels?.length ? voiceChannels : VOICE_CHANNELS).map(vc => {
-              const vmembers = voiceChannelMembers[vc.id] || [];
-              const inChannel = currentChannelId === vc.id;
-              return (
-                <div key={vc.id} id={`voice-channel-${vc.id}`} className={`voice-channel-item ${inChannel ? 'in-channel' : ''}`} onClick={() => handleVoiceJoin(vc.id)}>
-                  <div className={`voice-channel-header ${inChannel ? 'in-channel' : ''}`}>
-                    <span>{vc.emoji}</span>
-                    <span style={{ flex: 1 }}>{vc.name}</span>
-                    {vmembers.length > 0 && <span className="voice-count">{vmembers.length}</span>}
                   </div>
                 </div>
               );

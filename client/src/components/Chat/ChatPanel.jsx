@@ -159,7 +159,7 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
       </div>
 
       {/* Watch together (spaces only) */}
-      {!isDM && <WatchTogether roomId={activeRoomId} />}
+      {!isDM && <WatchTogether key={activeRoomId} roomId={activeRoomId} />}
 
       {/* Input */}
       <MessageInput roomId={activeRoomId} replyTo={replyTo} onClearReply={() => setReplyTo(null)} />

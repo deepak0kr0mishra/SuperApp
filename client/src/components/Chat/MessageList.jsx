@@ -5,6 +5,24 @@ import { useChatStore, messageText, isLegacyEncryptedBlob } from '../../stores/c
 import { useAuthStore } from '../../stores/authStore.js';
 import { getSocket } from '../../services/socket.js';
 import { api } from '../../services/api.js';
+import { findYouTubeId } from '../../utils/youtube.js';
+
+// Compact personal player for a YouTube link inside a message.
+// (The shared/synced player lives in the Watch-together card.)
+function InlineYouTube({ videoId }) {
+  if (!videoId) return null;
+  return (
+    <div className="msg-yt">
+      <iframe
+        src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0`}
+        title="YouTube video"
+        loading="lazy"
+        allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowFullScreen
+      />
+    </div>
+  );
+}
 
 export function formatBytes(bytes) {
   if (!bytes || bytes === 0) return '0 B';
@@ -313,7 +331,13 @@ function MessageContent({ message }) {
       </div>
     );
   }
-  return <div className="message-text">{text || <span className="empty-note">[empty]</span>}</div>;
+  const ytId = findYouTubeId(text);
+  return (
+    <>
+      <div className="message-text">{text || <span className="empty-note">[empty]</span>}</div>
+      {ytId && <InlineYouTube videoId={ytId} />}
+    </>
+  );
 }
 
 // --- Full Message List (paginated, infinite scroll up) ---

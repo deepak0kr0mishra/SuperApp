@@ -1,29 +1,62 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useChatStore } from '../../stores/chatStore.js';
 import { getSocket } from '../../services/socket.js';
 import { api } from '../../services/api.js';
+import { formatTime } from '../../utils/youtube.js';
 
-function toEmbedUrl(watch) {
-  if (!watch?.video_id) return '';
-  const params = new URLSearchParams({
-    autoplay: watch.is_playing ? '1' : '0',
-    rel: '0',
+// One shared YouTube player per room, driven by the real IFrame Player API.
+// Anyone can queue / play / pause / seek — every action syncs to the room
+// via socket + REST persistence. Volume stays personal (never synced).
+
+let ytApiPromise = null;
+function loadYouTubeAPI() {
+  if (typeof window === 'undefined') return Promise.reject(new Error('no window'));
+  if (window.YT?.Player) return Promise.resolve(window.YT);
+  if (ytApiPromise) return ytApiPromise;
+  ytApiPromise = new Promise((resolve, reject) => {
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    tag.async = true;
+    tag.onerror = () => reject(new Error('YouTube API failed to load'));
+    document.head.appendChild(tag);
+    const timeout = setTimeout(() => reject(new Error('YouTube API timeout')), 12000);
+    const prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      clearTimeout(timeout);
+      try { prev?.(); } catch {}
+      resolve(window.YT);
+    };
   });
-  if (watch.position > 0) params.set('start', String(Math.floor(watch.position)));
-  return `https://www.youtube-nocookie.com/embed/${watch.video_id}?${params.toString()}`;
+  return ytApiPromise;
 }
 
-// One shared YouTube player per room. Anyone can queue a link; play/pause
-// state syncs to everyone in the room via socket + REST persistence.
+// NOTE: parent renders <WatchTogether key={roomId} /> so all state is per-room
+// and resets cleanly when switching rooms.
 export default function WatchTogether({ roomId }) {
   const watch = useChatStore((s) => s.watch[roomId]);
-  const [url, setUrl] = useState('');
+  const [queueUrl, setQueueUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const lastVid = useRef('');
+  const [apiFailed, setApiFailed] = useState(false);
+  const [playerError, setPlayerError] = useState('');
+  const [ready, setReady] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(80);
+  const [muted, setMuted] = useState(false);
 
+  const mountRef = useRef(null);
+  const wrapRef = useRef(null);
+  const playerRef = useRef(null);
+  const volumeRef = useRef(80);
+  const lastRemoteRef = useRef(0);
+  volumeRef.current = volume;
+
+  const vid = watch?.video_id || '';
+
+  // Load persisted state on mount.
   useEffect(() => {
-    // Load persisted state when opening a room.
     api.getWatch(roomId)
       .then(({ watch: w }) => {
         if (w?.video_id) useChatStore.getState().setWatch(roomId, w);
@@ -31,22 +64,210 @@ export default function WatchTogether({ roomId }) {
       .catch(() => {});
   }, [roomId]);
 
+  // Broadcast + persist a playback change (local intent only).
+  const emitState = useCallback((nextPlaying, pos) => {
+    const position = Math.max(0, Math.floor(pos || 0));
+    const prev = useChatStore.getState().watch[roomId] || {};
+    useChatStore.getState().setWatch(roomId, {
+      ...prev, room_id: roomId, is_playing: nextPlaying ? 1 : 0, position,
+    });
+    getSocket()?.emit('watch:state', { roomId, is_playing: nextPlaying, position });
+    const videoId = useChatStore.getState().watch[roomId]?.video_id;
+    if (videoId) {
+      api.setWatch(roomId, { videoId, is_playing: nextPlaying, position }).catch(() => {});
+    }
+  }, [roomId]);
+
+  // Native player buttons (inside the iframe) also sync to the room,
+  // unless the change just came from a remote apply.
+  const handlePlayerState = useCallback((e) => {
+    if (Date.now() - lastRemoteRef.current < 1500) return;
+    try {
+      const st = e?.data;
+      if (st === window.YT?.PlayerState?.PLAYING) {
+        setPlaying(true);
+        emitState(true, playerRef.current?.getCurrentTime?.() || 0);
+      } else if (st === window.YT?.PlayerState?.PAUSED) {
+        setPlaying(false);
+        emitState(false, playerRef.current?.getCurrentTime?.() || 0);
+      }
+    } catch {}
+  }, [emitState]);
+
+  const handlePlayerError = useCallback(() => {
+    setPlayerError('This video cannot be played here (private, deleted, or embedding disabled). Try another link.');
+  }, []);
+
+  // Create / destroy the player for the current video.
   useEffect(() => {
-    if (watch?.video_id) lastVid.current = watch.video_id;
-  }, [watch?.video_id]);
+    if (!vid || apiFailed) return;
+    let cancelled = false;
+    let player = null;
+    setReady(false);
+    setPlaying(false);
+    setCurrent(0);
+    setDuration(0);
+    setPlayerError('');
+    loadYouTubeAPI().then((YT) => {
+      if (cancelled || !mountRef.current) return;
+      player = new YT.Player(mountRef.current, {
+        width: '100%',
+        height: '100%',
+        videoId: vid,
+        playerVars: { rel: 0, modestbranding: 1, iv_load_policy: 3 },
+        events: {
+          onReady: (e) => {
+            if (cancelled) return;
+            playerRef.current = e.target;
+            try {
+              e.target.setVolume(volumeRef.current);
+              const w = useChatStore.getState().watch[roomId];
+              if (w?.position > 0) e.target.seekTo(w.position, true);
+              if (w?.is_playing) e.target.playVideo();
+            } catch {}
+            setReady(true);
+          },
+          onStateChange: handlePlayerState,
+          onError: handlePlayerError,
+        },
+      });
+    }).catch(() => { if (!cancelled) setApiFailed(true); });
+    return () => {
+      cancelled = true;
+      try { player?.destroy(); } catch {}
+      if (playerRef.current === player) playerRef.current = null;
+      setReady(false);
+    };
+  }, [roomId, vid, apiFailed, handlePlayerState, handlePlayerError]);
+
+  // Apply remote state (echoes of our own actions are natural no-ops).
+  useEffect(() => {
+    const p = playerRef.current;
+    if (!p || !ready || !watch?.video_id) return;
+    lastRemoteRef.current = Date.now();
+    try {
+      const st = p.getPlayerState?.();
+      const isPlaying = st === 1;
+      const wantPlaying = !!watch.is_playing;
+      if (wantPlaying !== isPlaying) {
+        if (wantPlaying) p.playVideo();
+        else p.pauseVideo();
+      }
+      setPlaying(wantPlaying);
+    } catch {}
+    try {
+      const t = p.getCurrentTime?.() || 0;
+      if (Math.abs((watch.position || 0) - t) > 4) p.seekTo(watch.position || 0, true);
+    } catch {}
+  }, [watch, ready]);
+
+  // Progress ticker.
+  useEffect(() => {
+    if (!ready) return;
+    const t = setInterval(() => {
+      try {
+        const p = playerRef.current;
+        if (!p?.getCurrentTime) return;
+        setCurrent(p.getCurrentTime() || 0);
+        const d = p.getDuration?.() || 0;
+        if (d) setDuration(d);
+      } catch {}
+    }, 500);
+    return () => clearInterval(t);
+  }, [ready]);
+
+  // Heartbeat while playing so joiners land close to live.
+  useEffect(() => {
+    if (!ready || !playing) return;
+    const t = setInterval(() => {
+      try {
+        const pos = Math.floor(playerRef.current?.getCurrentTime?.() || 0);
+        getSocket()?.emit('watch:state', { roomId, is_playing: true, position: pos });
+      } catch {}
+    }, 10000);
+    return () => clearInterval(t);
+  }, [ready, playing, roomId]);
 
   if (!roomId) return null;
 
+  const localPos = () => {
+    try { return playerRef.current?.getCurrentTime?.() || current; } catch { return current; }
+  };
+
+  const doToggle = () => {
+    const p = playerRef.current;
+    if (!p || !ready) {
+      // API not ready yet — flip server state, player follows on load.
+      emitState(!playing, watch?.position || 0);
+      setPlaying(!playing);
+      return;
+    }
+    try {
+      if (playing) { p.pauseVideo(); }
+      else { p.playVideo(); }
+    } catch {}
+    const next = !playing;
+    setPlaying(next);
+    emitState(next, localPos());
+  };
+
+  const doSkip = (sec) => {
+    const p = playerRef.current;
+    const base = localPos();
+    const target = Math.max(0, Math.min(base + sec, duration || base + sec));
+    try { p?.seekTo?.(target, true); } catch {}
+    setCurrent(target);
+    emitState(playing, target);
+  };
+
+  const doSeek = (v) => {
+    const target = Number(v) || 0;
+    try { playerRef.current?.seekTo?.(target, true); } catch {}
+    setCurrent(target);
+    emitState(playing, target);
+  };
+
+  const doVolume = (v) => {
+    const val = Math.max(0, Math.min(100, Number(v) || 0));
+    setVolume(val);
+    try {
+      playerRef.current?.setVolume?.(val);
+      if (val > 0 && muted) { playerRef.current?.unMute?.(); setMuted(false); }
+    } catch {}
+  };
+
+  const doMute = () => {
+    try {
+      if (muted) { playerRef.current?.unMute?.(); }
+      else { playerRef.current?.mute?.(); }
+    } catch {}
+    setMuted(!muted);
+  };
+
+  const doFullscreen = () => {
+    try {
+      const el = wrapRef.current;
+      if (!el) return;
+      if (document.fullscreenElement) document.exitFullscreen();
+      else el.requestFullscreen?.();
+    } catch {}
+  };
+
   const submit = async (e) => {
     e?.preventDefault();
-    if (!url.trim() || busy) return;
+    if (!queueUrl.trim() || busy) return;
     setBusy(true);
     setError('');
+    setPlayerError('');
     try {
-      const { watch: w } = await api.setWatch(roomId, { url: url.trim(), is_playing: true, position: 0 });
-      useChatStore.getState().setWatch(roomId, w);
-      getSocket()?.emit('watch:set', { roomId, url: url.trim() });
-      setUrl('');
+      const { watch: w } = await api.setWatch(roomId, { url: queueUrl.trim(), is_playing: true, position: 0 });
+      if (w?.video_id) {
+        useChatStore.getState().setWatch(roomId, w);
+        getSocket()?.emit('watch:set', { roomId, url: queueUrl.trim() });
+        setQueueUrl('');
+      } else {
+        setError('Could not queue that link');
+      }
     } catch (err) {
       setError(err.message || 'Could not load that video');
     } finally {
@@ -54,56 +275,83 @@ export default function WatchTogether({ roomId }) {
     }
   };
 
-  const togglePlay = () => {
-    if (!watch?.video_id) return;
-    const next = !watch.is_playing;
-    const optimistic = { ...watch, is_playing: next ? 1 : 0 };
-    useChatStore.getState().setWatch(roomId, optimistic);
-    getSocket()?.emit('watch:state', { roomId, is_playing: next, position: watch.position || 0 });
-    api.setWatch(roomId, { videoId: watch.video_id, is_playing: next, position: watch.position || 0 }).catch(() => {});
-  };
-
   const clear = () => {
+    try { playerRef.current?.stopVideo?.(); } catch {}
     useChatStore.getState().setWatch(roomId, { room_id: roomId, video_id: '', url: '', is_playing: 0, position: 0 });
     getSocket()?.emit('watch:set', { roomId, url: '' });
     api.setWatch(roomId, { url: '' }).catch(() => {});
+    setPlaying(false);
+    setCurrent(0);
+    setDuration(0);
   };
 
   return (
     <div className="watch-card">
       <div className="watch-header">
         <span>📺 Watch together</span>
-        {watch?.video_id && (
+        {vid && (
           <span className="watch-actions">
-            <button className="btn-mini" onClick={togglePlay} title={watch.is_playing ? 'Pause for everyone' : 'Play for everyone'}>
-              {watch.is_playing ? '⏸ Pause' : '▶ Play'}
-            </button>
-            <button className="btn-mini" onClick={clear} title="Remove video">✕</button>
+            <button className="btn-mini" onClick={clear} title="Remove video">✕ Clear</button>
           </span>
         )}
       </div>
-      {watch?.video_id ? (
-        <div className="watch-player">
-          <iframe
-            key={`${watch.video_id}-${watch.is_playing ? 'play' : 'pause'}`}
-            src={toEmbedUrl(watch)}
-            title="Watch together"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-          />
+      {vid ? (
+        <div className="watch-player" ref={wrapRef}>
+          {apiFailed ? (
+            <iframe
+              src={`https://www.youtube-nocookie.com/embed/${vid}?rel=0`}
+              title="Watch together"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            />
+          ) : (
+            <div ref={mountRef} className="watch-yt-mount" />
+          )}
+          {playerError && <div className="form-error" style={{ marginTop: 8 }}>{playerError}</div>}
+          <div className="watch-controls">
+            <button className="wc-btn" onClick={() => doSkip(-10)} title="Back 10 seconds" disabled={!ready}>⏪<span>10</span></button>
+            <button className="wc-btn wc-play" onClick={doToggle} title={playing ? 'Pause for everyone' : 'Play for everyone'}>
+              {playing ? '⏸' : '▶'}
+            </button>
+            <button className="wc-btn" onClick={() => doSkip(10)} title="Forward 10 seconds" disabled={!ready}>⏩<span>10</span></button>
+            <span className="wc-time">{formatTime(current)} / {formatTime(duration)}</span>
+            <input
+              className="wc-seek"
+              type="range"
+              min={0}
+              max={Math.max(1, Math.floor(duration) || 100)}
+              value={Math.floor(Math.min(current, duration || current))}
+              onChange={(e) => doSeek(e.target.value)}
+              disabled={!ready || !duration}
+              title="Seek"
+            />
+            <button className="wc-btn" onClick={doMute} title={muted ? 'Unmute (you only)' : 'Mute (you only)'}>
+              {muted || volume === 0 ? '🔇' : volume < 50 ? '🔈' : '🔊'}
+            </button>
+            <input
+              className="wc-vol"
+              type="range"
+              min={0}
+              max={100}
+              value={muted ? 0 : volume}
+              onChange={(e) => doVolume(e.target.value)}
+              title="Volume (you only)"
+            />
+            <button className="wc-btn" onClick={doFullscreen} title="Fullscreen">⛶</button>
+          </div>
         </div>
       ) : (
-        <div className="watch-empty">No video yet — paste a YouTube link below and everyone watches in sync ✦</div>
+        <div className="watch-empty">No video yet — paste a YouTube link below (or right in chat) and everyone watches in sync ✦</div>
       )}
       <form className="watch-form" onSubmit={submit}>
         <input
           className="form-input"
           placeholder="Paste a YouTube link…"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
+          value={queueUrl}
+          onChange={(e) => setQueueUrl(e.target.value)}
           maxLength={500}
         />
-        <button className="btn-mini primary" type="submit" disabled={busy || !url.trim()}>
+        <button className="btn-mini primary" type="submit" disabled={busy || !queueUrl.trim()}>
           {busy ? 'Loading…' : 'Queue'}
         </button>
       </form>
