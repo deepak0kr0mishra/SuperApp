@@ -17,6 +17,11 @@ export default function AdminDashboard({ onClose }) {
   const [actionMsg, setActionMsg] = useState('');
   const [userQuery, setUserQuery] = useState('');
   const [msgQuery, setMsgQuery] = useState('');
+  const [backupMsg, setBackupMsg] = useState('');
+  const [restoreSel, setRestoreSel] = useState(null); // { name, size, backup?, counts?, exportedAt?, error? }
+  const [restoreAck, setRestoreAck] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [newChannel, setNewChannel] = useState('');
   const [newVoice, setNewVoice] = useState('');
   const [renameId, setRenameId] = useState(null);
@@ -171,32 +176,71 @@ export default function AdminDashboard({ onClose }) {
     } catch (err) { flash(err.message); }
   };
 
-  const handleBackup = async () => {
-    try {
-      const data = await api.adminBackup();
-      const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `teachat-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      flash('Backup downloaded — keep it safe');
-    } catch (err) { flash(err.message); }
+  const BACKUP_TABLES_CLIENT = ['users', 'rooms', 'room_members', 'messages', 'reactions', 'files', 'reports', 'room_reads', 'voice_channels'];
+
+  const backupStamp = () => {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return `teachat-backup-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.json`;
   };
 
-  const handleRestoreFile = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    if (!confirm(`Restore from ${file.name}? This REPLACES all current data.`)) return;
+  const summarizeCounts = (counts = {}) =>
+    `${counts.users ?? 0} users · ${counts.messages ?? 0} messages · ${counts.rooms ?? 0} spaces`;
+
+  const handleBackup = async () => {
     try {
-      const text = await file.text();
-      const backup = JSON.parse(text);
-      const res = await api.adminRestore(backup);
-      const n = res.restored?.users ?? 0;
-      flash(`Restored ${n} users — reloading…`);
+      setBackupMsg('Preparing backup…');
+      const data = await api.adminBackup();
+      const text = JSON.stringify(data);
+      const blob = new Blob([text], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = backupStamp();
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      const kb = (blob.size / 1024).toFixed(1);
+      setBackupMsg(`✅ Exported ${summarizeCounts(data.counts)} (${kb} KB) — keep the file safe.`);
+    } catch (err) { setBackupMsg('❌ Export failed: ' + err.message); }
+  };
+
+  const inspectBackupFile = async (file) => {
+    setRestoreAck(false);
+    if (!file) { setRestoreSel(null); return; }
+    if (file.size > 25 * 1024 * 1024) {
+      setRestoreSel({ name: file.name, error: 'File is over 25 MB — too large to restore.' });
+      return;
+    }
+    try {
+      const backup = JSON.parse(await file.text());
+      if (!backup || typeof backup !== 'object' || backup.app !== 'TeaChat' || !backup.tables) {
+        setRestoreSel({ name: file.name, error: 'Not a TeaChat backup file.' });
+        return;
+      }
+      if (backup.version !== 1) {
+        setRestoreSel({ name: file.name, error: `Unsupported backup version (v${backup.version ?? '?'}).` });
+        return;
+      }
+      const counts = {};
+      for (const t of BACKUP_TABLES_CLIENT) counts[t] = Array.isArray(backup.tables[t]) ? backup.tables[t].length : 0;
+      setRestoreSel({ name: file.name, size: file.size, backup, counts, exportedAt: backup.exportedAt });
+    } catch {
+      setRestoreSel({ name: file.name, error: 'Could not read that file (not valid JSON).' });
+    }
+  };
+
+  const handleRestore = async () => {
+    if (!restoreSel?.backup || !restoreAck || restoring) return;
+    setRestoring(true);
+    try {
+      const res = await api.adminRestore(restoreSel.backup);
+      const r = res.restored || {};
+      const skipped = Object.values(res.skipped || {}).reduce((a, b) => a + b, 0);
+      flash(`Restored ${r.users ?? 0} users, ${r.messages ?? 0} messages${skipped ? ` (${skipped} bad rows skipped)` : ''} — reloading…`);
       setTimeout(() => window.location.reload(), 1500);
     } catch (err) { flash(err.message || 'Restore failed'); }
+    finally { setRestoring(false); }
   };
 
   const handleReport = async (r, action) => {    try {
@@ -262,13 +306,57 @@ export default function AdminDashboard({ onClose }) {
                 <div className="admin-stat"><div className="admin-stat-num">{stats.rooms}</div><div className="admin-stat-label">✨ Spaces</div></div>
                 <div className="admin-stat"><div className="admin-stat-num">{stats.activeConversations ?? 0}</div><div className="admin-stat-label">🔥 Active (7d)</div></div>
                 <div className="admin-hint">10 slots: Admin_01…Admin_05 fixed + up to 5 promotable. Admin passwords can't be reset — each admin changes their own in Profile.</div>
-                <div className="admin-hint">
-                  ⚠️ Free hosting wipes data on every update —{' '}
-                  <button className="btn-mini primary" onClick={handleBackup}>Download backup</button>{' '}
-                  <label className="btn-mini" style={{ cursor: 'pointer' }}>
-                    Restore backup
-                    <input type="file" accept="application/json" style={{ display: 'none' }} onChange={handleRestoreFile} />
-                  </label>
+                <div className="admin-backup-card" style={{ gridColumn: '1 / -1', background: 'var(--bg-overlay)', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px', marginTop: 4 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 800 }}>💾 Data backup</span>
+                    <span className="admin-chip">ADMIN ONLY</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 10 }}>
+                    Free hosting wipes data on every update. <strong>Export</strong> saves everything
+                    (users, messages, spaces…) to a file. <strong>Import</strong> restores it afterwards.
+                  </div>
+                  <button className="btn-mini primary" onClick={handleBackup}>⬇ Export backup</button>
+                  {backupMsg && <div style={{ fontSize: 12, marginTop: 8 }}>{backupMsg}</div>}
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                    onDragLeave={() => setDragOver(false)}
+                    onDrop={(e) => { e.preventDefault(); setDragOver(false); inspectBackupFile(e.dataTransfer.files?.[0]); }}
+                    onClick={() => document.getElementById('restore-file-input')?.click()}
+                    style={{
+                      marginTop: 10, border: `1px dashed ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
+                      borderRadius: 10, padding: '12px', textAlign: 'center', fontSize: 12,
+                      color: 'var(--text-muted)', cursor: 'pointer',
+                      background: dragOver ? 'rgba(217,154,61,0.08)' : 'transparent',
+                    }}
+                  >
+                    📥 Drop a backup <code>.json</code> here, or click to choose a file
+                    <input
+                      id="restore-file-input"
+                      type="file"
+                      accept="application/json,.json"
+                      style={{ display: 'none' }}
+                      onChange={(e) => { inspectBackupFile(e.target.files?.[0]); e.target.value = ''; }}
+                    />
+                  </div>
+                  {restoreSel?.error && <div className="form-error" style={{ marginTop: 8 }}>⚠️ {restoreSel.error}</div>}
+                  {restoreSel?.backup && (
+                    <div style={{ marginTop: 10, fontSize: 12, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' }}>
+                      <div style={{ fontWeight: 700, marginBottom: 4 }}>📄 {restoreSel.name} <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>({(restoreSel.size / 1024).toFixed(1)} KB{restoreSel.exportedAt ? ` · exported ${new Date(restoreSel.exportedAt * 1000).toLocaleString()}` : ''})</span></div>
+                      <div style={{ color: 'var(--text-muted)', marginBottom: 8 }}>
+                        Contains: {summarizeCounts(restoreSel.counts)} · {restoreSel.counts.room_members ?? 0} memberships · {restoreSel.counts.reactions ?? 0} reactions
+                      </div>
+                      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', marginBottom: 10 }}>
+                        <input type="checkbox" checked={restoreAck} onChange={(e) => setRestoreAck(e.target.checked)} style={{ marginTop: 2 }} />
+                        <span>I understand this will <strong>replace ALL current data</strong> with the backup.</span>
+                      </label>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="btn-mini primary" onClick={handleRestore} disabled={!restoreAck || restoring}>
+                          {restoring ? 'Restoring…' : '♻ Restore now'}
+                        </button>
+                        <button className="btn-mini" onClick={() => { setRestoreSel(null); setRestoreAck(false); }}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

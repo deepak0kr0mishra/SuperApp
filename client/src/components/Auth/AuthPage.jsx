@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuthStore } from '../../stores/authStore.js';
+import packageJson from '../../../package.json';
 
 export default function AuthPage() {
   const [tab, setTab] = useState('login');
@@ -155,8 +156,12 @@ export default function AuthPage() {
             ⚡ Fast & Simple Chat
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            Instant messages, photos, videos & voice notes. Find anyone with their unique UID or username.
+            Instant messages, photos & videos. Find anyone with their unique UID or username.
           </div>
+        </div>
+
+        <div className="auth-version" style={{ marginTop: 16, textAlign: 'center', fontSize: 11, color: 'var(--text-muted)', opacity: 0.8 }}>
+          TeaChat v{packageJson.version}
         </div>
       </div>
     </div>

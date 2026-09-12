@@ -1504,23 +1504,6 @@ audio::-webkit-media-controls-panel { background: var(--bg-elevated); }
 .avatar-xs { width: 22px; height: 22px; font-size: 10px; border-radius: 6px; }
 .avatar-xl { width: 64px; height: 64px; font-size: 24px; border-radius: 18px; }
 
-/* Recording pulse (was missing — fixes invisible record state) */
-@keyframes recording-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(244,63,94,0.5); }
-  50% { opacity: 0.6; transform: scale(0.85); box-shadow: 0 0 0 6px rgba(244,63,94,0); }
-}
-#record-audio-btn {
-  background: rgba(244,63,94,0.1);
-  border: 1px solid rgba(244,63,94,0.25);
-  border-radius: 10px;
-}
-#record-audio-btn:hover {
-  background: rgba(244,63,94,0.2);
-  color: var(--danger);
-  box-shadow: 0 0 16px rgba(244,63,94,0.3);
-  transform: scale(1.05);
-}
-
 /* Profile modal */
 .profile-modal { width: 440px; max-width: calc(100vw - 32px); }
 .profile-hero { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
@@ -1757,19 +1740,6 @@ audio::-webkit-media-controls-panel { background: var(--bg-elevated); }
   border-radius: 8px; padding: 7px 12px; font-size: 12px; color: var(--danger); margin-bottom: 8px;
 }
 .progress-pct { font-size: 11px; font-family: monospace; color: var(--text-muted); }
-.recorder-bar {
-  display: flex; align-items: center; gap: 10px;
-  background: rgba(244,63,94,0.08); border: 1px solid rgba(244,63,94,0.25);
-  border-radius: 12px; padding: 8px 12px; margin-bottom: 8px;
-}
-.recorder-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); animation: recording-pulse 1s infinite; flex-shrink: 0; }
-.recorder-time { font-size: 13px; font-weight: 700; color: var(--danger); font-family: monospace; }
-.recorder-hint { flex: 1; font-size: 12px; color: var(--text-muted); }
-.btn-record-send {
-  background: var(--danger); border: none; border-radius: 8px; padding: 7px 14px;
-  color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
-}
-
 /* Search modal */
 .search-modal { width: 480px; max-height: 82vh; display: flex; flex-direction: column; overflow: hidden; }
 .search-tip { font-size: 11px; color: var(--text-muted); margin: 8px 2px 10px; }

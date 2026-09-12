@@ -158,14 +158,14 @@ function MessageContent({ message }) {
     }
   }
 
-  // --- Audio / voice note ---
+  // --- Audio (previously sent voice notes still play back) ---
   if (message.type === 'audio' && message.file_id) {
     const url = api.getFileUrl(message.file_id);
     return (
       <div className="message-audio">
         <span style={{ fontSize: 20 }}>🎵</span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="audio-title">{message.file_name || 'Voice Message'}</div>
+          <div className="audio-title">{message.file_name || 'Audio'}</div>
           <audio className="audio-player" controls src={url} preload="metadata" style={{ width: '100%', height: 32 }} />
         </div>
       </div>
@@ -330,7 +330,7 @@ export default function MessageList({ roomId, onReply, onOpenProfile }) {
       <div className="message-list message-list-empty" ref={listRef}>
         <div className="message-list-empty-icon">💬</div>
         <div className="message-list-empty-text">Start the conversation</div>
-        <div className="message-list-empty-sub">Send a message, photo, or voice note below</div>
+        <div className="message-list-empty-sub">Send a message or photo below</div>
       </div>
     );
   }

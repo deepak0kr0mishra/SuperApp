@@ -36,68 +36,6 @@ function useTypingIndicator(roomId) {
   return { startTyping, stopTyping };
 }
 
-// --- Audio Recorder component ---
-function AudioRecorder({ onRecordingComplete, onCancel }) {
-  const [elapsed, setElapsed] = useState(0);
-  const mediaRecorderRef = useRef(null);
-  const chunksRef = useRef([]);
-  const timerRef = useRef(null);
-  const streamRef = useRef(null);
-
-  useEffect(() => {
-    startRecording();
-    return () => cleanup();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const cleanup = () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    streamRef.current?.getTracks().forEach(t => t.stop());
-  };
-
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
-      mediaRecorderRef.current = recorder;
-      chunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        onRecordingComplete(blob, mimeType);
-        cleanup();
-      };
-      recorder.start(100);
-      timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
-    } catch (err) {
-      console.error('Recording error:', err);
-      onCancel();
-    }
-  };
-
-  const stopRecording = () => {
-    mediaRecorderRef.current?.stop();
-  };
-
-  const formatTime = (s) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
-
-  return (
-    <div className="recorder-bar">
-      <div className="recorder-dot" />
-      <span className="recorder-time">{formatTime(elapsed)}</span>
-      <span className="recorder-hint">Recording…</span>
-      <button className="icon-btn" onClick={() => { cleanup(); onCancel(); }} title="Cancel recording">🗑</button>
-      <button id="stop-recording-btn" className="btn-record-send" onClick={stopRecording}>⏹ Send</button>
-    </div>
-  );
-}
-
 export function classifyFile(file, forceMime) {
   const mime = forceMime || file.type || '';
   if (mime.startsWith('image/')) return 'image';
@@ -112,7 +50,6 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
   const [showEmoji, setShowEmoji] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
   const [sendError, setSendError] = useState('');
 
   const textareaRef = useRef(null);
@@ -212,13 +149,6 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
     e.target.value = '';
   };
 
-  const handleRecordingComplete = async (blob, mimeType) => {
-    setIsRecording(false);
-    const ext = mimeType.includes('ogg') ? '.ogg' : '.webm';
-    const file = new File([blob], `voice-message-${Date.now()}${ext}`, { type: mimeType });
-    await sendFile(file, mimeType);
-  };
-
   const onEmojiClick = (emojiData) => {
     const emoji = emojiData.emoji;
     const start = textareaRef.current?.selectionStart ?? text.length;
@@ -251,72 +181,56 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
         </div>
       )}
 
-      {isRecording && (
-        <AudioRecorder
-          onRecordingComplete={handleRecordingComplete}
-          onCancel={() => setIsRecording(false)}
+      <div className="input-box">
+        <input
+          type="file"
+          ref={fileInputRef}
+          style={{ display: 'none' }}
+          accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.zip"
+          onChange={handleFileSelect}
+          id="file-attach-input"
         />
-      )}
-
-      {!isRecording && (
-        <div className="input-box">
-          <input
-            type="file"
-            ref={fileInputRef}
-            style={{ display: 'none' }}
-            accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.zip"
-            onChange={handleFileSelect}
-            id="file-attach-input"
-          />
-          <button
-            id="attach-file-btn"
-            className="input-action-btn"
-            onClick={() => fileInputRef.current?.click()}
-            title="Attach photo, video, or file"
-            disabled={uploading}
-          >📎</button>
-          <button
-            id="record-audio-btn"
-            className="input-action-btn"
-            onClick={() => setIsRecording(true)}
-            title="Record voice note"
-            disabled={uploading}
-          >🎙️</button>
-          <textarea
-            ref={textareaRef}
-            id="message-textarea"
-            placeholder={`Message ${activeRoom?.type === 'dm' ? '' : '#'}${activeRoom?.name || 'channel'}`}
-            value={text}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            disabled={uploading}
-            maxLength={2000}
-          />
-          <div className="input-actions">
-            <div style={{ position: 'relative' }} ref={emojiRef}>
-              <button
-                id="emoji-picker-btn"
-                className="input-action-btn"
-                onClick={() => setShowEmoji(v => !v)}
-                title="Emoji"
-              >😊</button>
-              {showEmoji && (
-                <div className="emoji-picker-wrapper">
-                  <EmojiPicker onEmojiClick={onEmojiClick} theme="dark" skinTonesDisabled lazyLoadEmojis />
-                </div>
-              )}
-            </div>
+        <button
+          id="attach-file-btn"
+          className="input-action-btn"
+          onClick={() => fileInputRef.current?.click()}
+          title="Attach photo, video, or file"
+          disabled={uploading}
+        >📎</button>
+        <textarea
+          ref={textareaRef}
+          id="message-textarea"
+          placeholder={`Message ${activeRoom?.type === 'dm' ? '' : '#'}${activeRoom?.name || 'channel'}`}
+          value={text}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          rows={1}
+          disabled={uploading}
+          maxLength={2000}
+        />
+        <div className="input-actions">
+          <div style={{ position: 'relative' }} ref={emojiRef}>
             <button
-              id="send-message-btn"
-              className="send-btn"
-              onClick={sendTextMessage}
-              disabled={!text.trim() || uploading}
-              title="Send message (Enter)"
-            >➤</button>
+              id="emoji-picker-btn"
+              className="input-action-btn"
+              onClick={() => setShowEmoji(v => !v)}
+              title="Emoji"
+            >😊</button>
+            {showEmoji && (
+              <div className="emoji-picker-wrapper">
+                <EmojiPicker onEmojiClick={onEmojiClick} theme="dark" skinTonesDisabled lazyLoadEmojis />
+              </div>
+            )}
           </div>
+          <button
+            id="send-message-btn"
+            className="send-btn"
+            onClick={sendTextMessage}
+            disabled={!text.trim() || uploading}
+            title="Send message (Enter)"
+          >➤</button>
         </div>
-      )}
+      </div>
     </div>
   );
 }
