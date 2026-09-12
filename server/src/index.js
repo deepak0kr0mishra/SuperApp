@@ -10,7 +10,7 @@ import filesRouter from './files.js';
 import usersRouter from './users.js';
 import adminRouter from './admin.js';
 import reportsRouter from './reports.js';
-import { messageQueries, roomQueries, userQueries, readQueries } from './db.js';
+import { messageQueries, roomQueries, userQueries, readQueries, replaceReaction } from './db.js';
 import { setupVoiceSignaling, getVoiceChannelState, voiceRouter } from './voice.js';
 import { securityHeaders, generalLimiter, messageLimiter, sanitizeMessageContent } from './security.js';
 import { MESSAGE_MAX_LENGTH } from './db.js';
@@ -405,11 +405,14 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Reactions ---
+  // --- Reactions: exactly one per user per message (new react swaps the old) ---
   socket.on('message:react', ({ messageId, emoji, roomId }) => {
     try {
       if (!messageId || !emoji) return;
-      messageQueries.addReaction.run(messageId, socket.userId, String(emoji).slice(0, 16));
+      const clean = String(emoji).trim().slice(0, 16);
+      // Must be a single emoji grapheme (allow ZWJ sequences), not text.
+      if (!clean || [...clean].length > 8) return;
+      replaceReaction(messageId, socket.userId, clean);
       const reactions = messageQueries.getReactions.all(messageId);
       io.to(`room:${roomId}`).emit('message:reactions_update', { messageId, reactions });
     } catch (err) {

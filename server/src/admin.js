@@ -287,7 +287,7 @@ const BACKUP_APP = 'TeaChat';
 const BACKUP_VERSION = 1;
 const BACKUP_TABLES = [
   'users', 'rooms', 'room_members', 'messages', 'reactions',
-  'files', 'reports', 'room_reads', 'voice_channels',
+  'files', 'reports', 'room_reads', 'voice_channels', 'reaction_favorites',
 ];
 
 // Columns allowed per table on restore. Backup files are admin-supplied JSON,
@@ -302,6 +302,7 @@ const BACKUP_COLUMNS = {
   reports: ['id', 'reporter_id', 'target_user_id', 'message_id', 'reason', 'status', 'created_at', 'resolved_at', 'resolved_by'],
   room_reads: ['room_id', 'user_id', 'last_read_at'],
   voice_channels: ['id', 'name', 'description', 'created_by', 'created_at'],
+  reaction_favorites: ['user_id', 'favs', 'updated_at'],
 };
 
 // GET /api/admin/backup — download full JSON dump (admin only, see router.use)
@@ -366,7 +367,7 @@ router.post('/restore', (req, res) => {
     }
     const txn = db.transaction(() => {
       // Clear in dependency-safe order (children before parents; FKs are ON)
-      for (const t of ['reactions', 'room_reads', 'reports', 'messages', 'room_members', 'files', 'rooms', 'voice_channels']) {
+      for (const t of ['reactions', 'room_reads', 'reports', 'messages', 'room_members', 'files', 'rooms', 'voice_channels', 'reaction_favorites']) {
         try { db.prepare(`DELETE FROM ${t}`).run(); } catch {}
       }
       // Users: delete all except none — full replace (fixed admins re-seeded
@@ -383,7 +384,7 @@ router.post('/restore', (req, res) => {
         db.prepare(`INSERT OR REPLACE INTO ${t} (${cols.join(',')}) VALUES (${ph})`).run(...cols.map(c => row[c]));
       };
       // Insert parents before children (FKs are ON)
-      for (const t of ['users', 'rooms', 'voice_channels', 'room_members', 'files', 'messages', 'reactions', 'reports', 'room_reads']) {
+      for (const t of ['users', 'rooms', 'voice_channels', 'room_members', 'files', 'messages', 'reactions', 'reports', 'room_reads', 'reaction_favorites']) {
         for (const row of cleanRows[t]) insert(t, row);
       }
     });

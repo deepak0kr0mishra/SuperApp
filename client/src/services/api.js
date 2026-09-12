@@ -70,6 +70,8 @@ export const api = {
   getAllUsers: () => request('GET', '/rooms/users/all'),
   searchUsers: (q) => request('GET', `/users/search?q=${encodeURIComponent(q)}`),
   getUser: (id) => request('GET', `/users/${id}`),
+  getReactionFavorites: () => request('GET', '/users/me/reaction-favorites'),
+  setReactionFavorites: (favs) => request('PUT', '/users/me/reaction-favorites', { favs }),
 
   // Admin
   adminStats: () => request('GET', '/admin/stats'),

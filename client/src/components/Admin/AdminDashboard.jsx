@@ -176,7 +176,7 @@ export default function AdminDashboard({ onClose }) {
     } catch (err) { flash(err.message); }
   };
 
-  const BACKUP_TABLES_CLIENT = ['users', 'rooms', 'room_members', 'messages', 'reactions', 'files', 'reports', 'room_reads', 'voice_channels'];
+  const BACKUP_TABLES_CLIENT = ['users', 'rooms', 'room_members', 'messages', 'reactions', 'files', 'reports', 'room_reads', 'voice_channels', 'reaction_favorites'];
 
   const backupStamp = () => {
     const d = new Date();

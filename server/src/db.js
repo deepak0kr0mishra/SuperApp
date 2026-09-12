@@ -79,6 +79,14 @@ db.exec(`
     FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
   );
 
+  -- Personal quick-reaction favorites (one row per user, JSON array of emoji).
+  -- Used for the Admin_01 <-> Admin_02 DM custom bar; harmless for everyone else.
+  CREATE TABLE IF NOT EXISTS reaction_favorites (
+    user_id TEXT PRIMARY KEY,
+    favs TEXT NOT NULL DEFAULT '[]',
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
   CREATE TABLE IF NOT EXISTS files (
     id TEXT PRIMARY KEY,
     uploader_id TEXT NOT NULL,
@@ -145,6 +153,9 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at DESC)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_users_search ON users(username, user_code)`); } catch {}
+// One-reaction-per-user rule: drop stacked extras, keeping each user's most
+// recent reaction per message (highest rowid = latest insert).
+try { db.exec(`DELETE FROM reactions WHERE rowid NOT IN (SELECT MAX(rowid) FROM reactions GROUP BY message_id, user_id)`); } catch {}
 
 // Seed default channels if not exist
 const seedRooms = () => {
@@ -481,6 +492,7 @@ export const messageQueries = {
     FROM reactions WHERE message_id = ?
     GROUP BY emoji
   `),
+  removeAllUserReactions: db.prepare('DELETE FROM reactions WHERE message_id = ? AND user_id = ?'),
   count: db.prepare('SELECT COUNT(*) as c FROM messages'),
   countToday: db.prepare(`SELECT COUNT(*) as c FROM messages WHERE created_at >= unixepoch('now', 'start of day')`),
   unreadCount: db.prepare(`
@@ -489,6 +501,40 @@ export const messageQueries = {
     WHERE m.room_id = ? AND m.created_at > COALESCE(rr.last_read_at, 0) AND m.sender_id != ?
   `),
 };
+
+// --- Reactions: one per user per message + personal favorites ---
+// Default quick bar for the Admin_01 <-> Admin_02 DM (each of them can
+// customize their own copy via /api/users/me/reaction-favorites).
+export const DEFAULT_REACTION_FAVS = ['🥴', '😊', '😂', '🙄', '🥺', '❤️'];
+export const MAX_REACTION_FAVS = 6;
+
+// Swap-in reaction: removes the user's other reaction(s) on this message
+// first, so exactly one remains. Runs as a single transaction.
+export const replaceReaction = db.transaction((messageId, userId, emoji) => {
+  messageQueries.removeAllUserReactions.run(messageId, userId);
+  messageQueries.addReaction.run(messageId, userId, emoji);
+});
+
+export const favQueries = {
+  get: db.prepare('SELECT favs FROM reaction_favorites WHERE user_id = ?'),
+  set: db.prepare(`
+    INSERT INTO reaction_favorites (user_id, favs, updated_at)
+    VALUES (?, ?, unixepoch())
+    ON CONFLICT(user_id) DO UPDATE SET favs = excluded.favs, updated_at = unixepoch()
+  `),
+};
+
+// True only for the 1:1 DM whose members are exactly admin-01 + admin-02.
+export function isSpecialDMRoom(roomId) {
+  try {
+    const room = roomQueries.findById.get(roomId);
+    if (!room || room.type !== 'dm') return false;
+    const ids = roomQueries.getMembers.all(roomId).map((m) => m.id).sort();
+    return ids.length === 2 && ids[0] === 'admin-01' && ids[1] === 'admin-02';
+  } catch {
+    return false;
+  }
+}
 
 export const readQueries = {
   markRead: db.prepare(`

@@ -1,8 +1,48 @@
 import express from 'express';
-import { userQueries } from './db.js';
+import { userQueries, favQueries, DEFAULT_REACTION_FAVS, MAX_REACTION_FAVS } from './db.js';
 import { authenticateToken } from './auth.js';
 
 const router = express.Router();
+
+function readFavs(userId) {
+  try {
+    const row = favQueries.get.get(userId);
+    if (!row) return [...DEFAULT_REACTION_FAVS];
+    const arr = JSON.parse(row.favs);
+    if (!Array.isArray(arr) || arr.length === 0) return [...DEFAULT_REACTION_FAVS];
+    return arr.filter((e) => typeof e === 'string').slice(0, MAX_REACTION_FAVS);
+  } catch {
+    return [...DEFAULT_REACTION_FAVS];
+  }
+}
+
+// GET /api/users/me/reaction-favorites — my quick-reaction bar
+router.get('/me/reaction-favorites', authenticateToken, (req, res) => {
+  res.json({ favs: readFavs(req.user.userId) });
+});
+
+// PUT /api/users/me/reaction-favorites — { favs: [emoji...] } (own bar only)
+router.put('/me/reaction-favorites', authenticateToken, (req, res) => {
+  const { favs } = req.body || {};
+  if (!Array.isArray(favs) || favs.length === 0 || favs.length > MAX_REACTION_FAVS) {
+    return res.status(400).json({ error: `Send 1–${MAX_REACTION_FAVS} emoji.` });
+  }
+  const clean = [];
+  for (const e of favs) {
+    if (typeof e !== 'string') return res.status(400).json({ error: 'Each favorite must be an emoji.' });
+    const c = e.trim().slice(0, 16);
+    if (!c || [...c].length > 8) return res.status(400).json({ error: 'Each favorite must be a single emoji.' });
+    if (!clean.includes(c)) clean.push(c);
+  }
+  if (!clean.length) return res.status(400).json({ error: 'Send at least one emoji.' });
+  try {
+    favQueries.set.run(req.user.userId, JSON.stringify(clean));
+    res.json({ favs: clean });
+  } catch (err) {
+    console.error('Save favorites error:', err);
+    res.status(500).json({ error: 'Could not save favorites' });
+  }
+});
 
 // GET /api/users/me — current user (alias of /api/auth/me for spec compat)
 router.get('/me', authenticateToken, (req, res) => {

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { format, isToday, isYesterday, isSameDay } from 'date-fns';
+import EmojiPicker from 'emoji-picker-react';
 import { useChatStore, messageText, isLegacyEncryptedBlob } from '../../stores/chatStore.js';
 import { useAuthStore } from '../../stores/authStore.js';
 import { getSocket } from '../../services/socket.js';
@@ -25,6 +26,30 @@ export function getFileIcon(mime = '') {
 }
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+// Starter set for the Admin_01 <-> Admin_02 DM — each of them can customize
+// their own copy (synced server-side via /api/users/me/reaction-favorites).
+const SPECIAL_DEFAULT_FAVS = ['🥴', '😊', '😂', '🙄', '🥺', '❤️'];
+
+// True only for the 1:1 DM whose two members are Admin_01 + Admin_02
+// (matched by stable id or username so renames can't break it).
+function isSpecialDMRoomClient(room, roomMembers) {
+  if (!room || room.type !== 'dm') return false;
+  if (!roomMembers || roomMembers.length !== 2) return false;
+  const ids = roomMembers.map(m => m.id);
+  const unames = roomMembers.map(m => m.username);
+  const has01 = ids.includes('admin-01') || unames.includes('Admin_01');
+  const has02 = ids.includes('admin-02') || unames.includes('Admin_02');
+  return has01 && has02;
+}
+
+function myReactionEmoji(message, myId) {
+  if (!myId || !message.reactions) return null;
+  for (const r of message.reactions) {
+    const users = r.users ? String(r.users).split(',') : [];
+    if (users.includes(myId)) return r.emoji;
+  }
+  return null;
+}
 
 function DateDivider({ date }) {
   const d = new Date(date * 1000);
@@ -35,23 +60,34 @@ function DateDivider({ date }) {
   return <div className="date-divider">{label}</div>;
 }
 
-function MessageActions({ message, roomId, onReply, onEdit, onReport }) {
+function MessageActions({ message, roomId, onReply, onEdit, onReport, quickBar, onEditFavs }) {
   const { user } = useAuthStore();
   const socket = getSocket();
   const deleted = !!message.is_deleted;
+  const bar = Array.isArray(quickBar) && quickBar.length ? quickBar : QUICK_REACTIONS;
+  const mine = myReactionEmoji(message, user?.id);
+  const tapQuick = (emoji) => {
+    if (!socket) return;
+    // One reaction per user: tapping yours again removes it, tapping another swaps it.
+    if (mine === emoji) socket.emit('message:unreact', { messageId: message.id, emoji, roomId });
+    else socket.emit('message:react', { messageId: message.id, emoji, roomId });
+  };
   return (
     <div className="message-actions">
-      {!deleted && QUICK_REACTIONS.map(emoji => (
+      {!deleted && bar.map(emoji => (
         <button
           key={emoji}
-          className="input-action-btn"
+          className={`input-action-btn ${mine === emoji ? 'reacted' : ''}`}
           style={{ fontSize: 16 }}
-          onClick={() => socket?.emit('message:react', { messageId: message.id, emoji, roomId })}
+          onClick={() => tapQuick(emoji)}
           title={emoji}
         >
           {emoji}
         </button>
       ))}
+      {!deleted && onEditFavs && (
+        <button className="input-action-btn" onClick={onEditFavs} title="Customize my quick reactions" style={{ fontSize: 14 }}>⚙️</button>
+      )}
       {!deleted && (
         <button className="input-action-btn" onClick={() => onReply(message)} title="Reply" style={{ fontSize: 14 }}>↩</button>
       )}
@@ -87,6 +123,73 @@ function ReplyQuote({ replyId, roomId }) {
       <span className="reply-quote-text">
         {target.type !== 'text' ? `📎 ${target.file_name || target.type}` : text.slice(0, 120)}
       </span>
+    </div>
+  );
+}
+
+// --- Personal quick-reaction favorites editor (special DM only) ---
+function FavEditor({ initial, onClose, onSaved }) {
+  const [favs, setFavs] = useState(() => [...initial]);
+  const [slot, setSlot] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  const pick = (emojiData) => {
+    const emoji = emojiData.emoji;
+    if (!emoji) return;
+    setFavs(prev => {
+      const next = [...prev];
+      next[Math.min(slot, next.length - 1)] = emoji;
+      return next;
+    });
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setErr('');
+    try {
+      const { favs: saved } = await api.setReactionFavorites(favs);
+      onSaved(saved && saved.length ? saved : favs);
+    } catch (e) {
+      setErr(e.message || 'Could not save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal fav-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="modal-title">✨ My quick reactions</div>
+          <button className="icon-btn" onClick={onClose}>✕</button>
+        </div>
+        <div className="fav-hint">Tap a slot, then pick an emoji. This bar shows only in your special DM.</div>
+        <div className="fav-slots">
+          {favs.map((f, i) => (
+            <button
+              key={i}
+              className={`fav-slot ${i === slot ? 'selected' : ''}`}
+              onClick={() => setSlot(i)}
+              title={`Slot ${i + 1}`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+        <div className="fav-picker">
+          <EmojiPicker onEmojiClick={pick} skinTonesDisabled lazyLoadEmojis height={320} width="100%" />
+        </div>
+        {err && <div className="form-error" style={{ marginTop: 10 }}>{err}</div>}
+        <div className="fav-actions">
+          <button className="btn-ghost" style={{ width: 'auto', flex: 1 }} onClick={() => { setFavs([...SPECIAL_DEFAULT_FAVS]); setSlot(0); }}>
+            Reset
+          </button>
+          <button className="btn-primary" style={{ flex: 2 }} onClick={save} disabled={saving}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -215,7 +318,7 @@ function MessageContent({ message }) {
 
 // --- Full Message List (paginated, infinite scroll up) ---
 export default function MessageList({ roomId, onReply, onOpenProfile }) {
-  const { messages, hasMore, loadingOlder } = useChatStore();
+  const { messages, hasMore, loadingOlder, rooms, members } = useChatStore();
   const { user } = useAuthStore();
   const listRef = useRef(null);
   const stickRef = useRef(true);
@@ -226,6 +329,21 @@ export default function MessageList({ roomId, onReply, onOpenProfile }) {
   const [reportMsg, setReportMsg] = useState(null);
   const [reportReason, setReportReason] = useState('');
   const [reportState, setReportState] = useState('');
+  const [favs, setFavs] = useState([...SPECIAL_DEFAULT_FAVS]);
+  const [showFavEdit, setShowFavEdit] = useState(false);
+
+  // Special DM (Admin_01 <-> Admin_02) gets the customizable quick bar.
+  const activeRoom = rooms.find(r => r.id === roomId);
+  const specialDM = isSpecialDMRoomClient(activeRoom, members[roomId] || []);
+
+  useEffect(() => {
+    if (!specialDM) return;
+    let cancelled = false;
+    api.getReactionFavorites()
+      .then(({ favs: f }) => { if (!cancelled && Array.isArray(f) && f.length) setFavs(f); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [specialDM]);
 
   // Mark room as read whenever the visible history changes while focused.
   useEffect(() => {
@@ -409,7 +527,15 @@ export default function MessageList({ roomId, onReply, onOpenProfile }) {
                   </div>
                 )}
               </div>
-              <MessageActions message={msg} roomId={roomId} onReply={onReply} onEdit={startEdit} onReport={setReportMsg} />
+              <MessageActions
+                message={msg}
+                roomId={roomId}
+                onReply={onReply}
+                onEdit={startEdit}
+                onReport={setReportMsg}
+                quickBar={specialDM ? favs : QUICK_REACTIONS}
+                onEditFavs={specialDM ? () => setShowFavEdit(true) : null}
+              />
             </div>
           </React.Fragment>
         );
@@ -447,6 +573,14 @@ export default function MessageList({ roomId, onReply, onOpenProfile }) {
             </form>
           </div>
         </div>
+      )}
+
+      {showFavEdit && (
+        <FavEditor
+          initial={favs}
+          onClose={() => setShowFavEdit(false)}
+          onSaved={(f) => { setFavs(f); setShowFavEdit(false); }}
+        />
       )}
     </div>
   );
