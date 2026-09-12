@@ -262,22 +262,17 @@ const backfillUsers = () => {
 backfillUsers();
 
 // --- Fixed admin accounts: Admin_01..Admin_05 ---
-// The seed password comes from the ADMIN_PASSWORD env var (set it in the
-// Render dashboard — never commit passwords to git). Local dev falls back
-// to a documented default; production with no env var gets a one-time
-// random password printed to the server logs (visible only to the owner).
-import { randomBytes } from 'crypto';
+// Password rule (same in every environment):
+//   - ADMIN_PASSWORD env var set   → that value, applied on EVERY boot
+//     (explicit owner intent — also resets existing fixed-admin passwords,
+//     so a locked-out owner recovers with a restart, no wipe needed).
+//   - env var unset                → '***REMOVED***' for newly created admins;
+//     existing admins' passwords are never touched.
+const DEFAULT_ADMIN_PASSWORD = '***REMOVED***';
 
 function getSeedAdminPassword() {
-  if (process.env.ADMIN_PASSWORD) return { password: process.env.ADMIN_PASSWORD, generated: false };
-  if (process.env.NODE_ENV === 'production') {
-    const password = 'Admin-' + randomBytes(9).toString('base64url');
-    console.warn('  [seed] WARNING: ADMIN_PASSWORD is not set — generated a one-time');
-    console.warn(`  [seed] fixed-admin password: ${password}`);
-    console.warn('  [seed] Set ADMIN_PASSWORD in the dashboard and redeploy for a stable login.');
-    return { password, generated: true };
-  }
-  return { password: '***REMOVED***', generated: false };
+  if (process.env.ADMIN_PASSWORD) return { password: process.env.ADMIN_PASSWORD, envOverride: true };
+  return { password: DEFAULT_ADMIN_PASSWORD, envOverride: false };
 }
 // Total admin capacity is 10: the 5 fixed admins (always admin, protected)
 // plus up to 5 promotable slots for regular users. Seeded on every boot
@@ -292,7 +287,7 @@ export const isFixedAdmin = (user) =>
 
 const seedFixedAdmins = () => {
   try {
-    const { password: seedPassword } = getSeedAdminPassword();
+    const { password: seedPassword, envOverride } = getSeedAdminPassword();
     const hash = bcrypt.hashSync(seedPassword, 12);
     for (let i = 0; i < 5; i++) {
       const username = FIXED_ADMIN_USERNAMES[i];
@@ -315,9 +310,14 @@ const seedFixedAdmins = () => {
         `).run(id, uid, username, `admin_0${i + 1}@teachat.local`, `Admin 0${i + 1}`, hash, '#b06a1f', user_code, 'TeaChat administrator');
         console.log(`  [seed] created fixed admin ${username}`);
       } else {
-        // Re-affirm: fixed admins are always enabled admins. Passwords are
-        // never touched here (admins change their own via /auth/password).
+        // Re-affirm: fixed admins are always enabled admins.
         db.prepare(`UPDATE users SET role = 'admin', is_disabled = 0 WHERE id = ?`).run(existing.id);
+        // Owner recovery: an explicitly-set ADMIN_PASSWORD always wins, so a
+        // locked-out owner gets back in with a restart (no wipe needed).
+        // Without the env var, existing passwords are never touched.
+        if (envOverride) {
+          db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(hash, existing.id);
+        }
       }
       // Fixed admins belong to every public channel.
       try {
