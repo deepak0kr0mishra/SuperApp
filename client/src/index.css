@@ -1590,8 +1590,6 @@ audio::-webkit-media-controls-panel { background: var(--bg-elevated); }
 .admin-stat-num { font-size: 32px; font-weight: 800; background: var(--cosmic-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
 .admin-stat-label { font-size: 12px; color: var(--text-muted); font-weight: 600; margin-top: 4px; }
 .admin-hint { grid-column: 1 / -1; font-size: 12px; color: var(--text-muted); text-align: center; padding: 8px; line-height: 1.5; word-break: break-word; }
-.admin-backup-card { min-width: 0; word-break: break-word; }
-.admin-backup-card code { word-break: break-all; }
 .admin-list { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
 .admin-search { display: flex; gap: 8px; margin-bottom: 8px; flex-shrink: 0; }
 .admin-search .form-input { flex: 1; min-width: 0; }
