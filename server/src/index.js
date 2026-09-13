@@ -10,23 +10,22 @@ import filesRouter from './files.js';
 import usersRouter from './users.js';
 import adminRouter from './admin.js';
 import reportsRouter from './reports.js';
-import { messageQueries, roomQueries, userQueries, readQueries, replaceReaction, isChatMuted, isDMBlocked, watchQueries, extractYouTubeId } from './db.js';
+import {
+  messageQueries, roomQueries, userQueries, readQueries,
+  replaceReaction, isChatMuted, isDMBlocked, watchQueries, extractYouTubeId,
+  MESSAGE_MAX_LENGTH,
+} from './db.js';
 import { setupVoiceSignaling, getVoiceChannelState, voiceRouter } from './voice.js';
 import { securityHeaders, generalLimiter, messageLimiter, sanitizeMessageContent } from './security.js';
-import { MESSAGE_MAX_LENGTH } from './db.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'securechat_secret_key_change_in_prod';
 const PORT = process.env.PORT || 3001;
-// Allow comma-separated list so Pages URL + localhost both work:
-// e.g. CLIENT_URL=https://deepak0kr0mishra.github.io,http://localhost:5173
 const CLIENT_URLS = (process.env.CLIENT_URL || 'http://localhost:5173')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+  .split(',').map((s) => s.trim()).filter(Boolean);
+
 const corsOrigin = (origin, cb) => {
-  if (!origin) return cb(null, true); // curl / health checks
+  if (!origin) return cb(null, true);
   if (CLIENT_URLS.includes(origin)) return cb(null, true);
-  // Allow any github.io subdomain of the owner for preview URLs
   try {
     const u = new URL(origin);
     if (u.hostname.endsWith('.github.io')) return cb(null, true);
@@ -38,21 +37,15 @@ const app = express();
 const httpServer = createServer(app);
 
 const io = new Server(httpServer, {
-  cors: {
-    origin: corsOrigin,
-    methods: ['GET', 'POST'],
-    credentials: true,
-  },
-  maxHttpBufferSize: 50 * 1024 * 1024, // 50MB for file chunks
+  cors: { origin: corsOrigin, methods: ['GET', 'POST'], credentials: true },
+  maxHttpBufferSize: 50 * 1024 * 1024,
 });
 
-// --- Middleware ---
 app.use(securityHeaders());
 app.use(cors({ origin: corsOrigin, credentials: true }));
-app.use(express.json({ limit: '25mb' })); // room for /api/admin/restore payloads
+app.use(express.json({ limit: '25mb' }));
 app.use('/api/', generalLimiter);
 
-// --- REST Routes ---
 app.use('/api/auth', authRouter);
 app.use('/api/rooms', roomsRouter);
 app.use('/api/files', filesRouter);
@@ -61,126 +54,151 @@ app.use('/api/admin', adminRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/voice', voiceRouter);
 
-// Spec-compatible aliases (reuse same handlers, no duplicate logic):
-// GET /api/channels, GET /api/channels/:id/messages, GET/POST /api/conversations, etc.
-app.get('/api/channels', authenticateToken, (req, res) => {
-  const rooms = roomQueries.findAll.all().filter((r) => r.type === 'channel');
-  res.json({ channels: rooms, rooms });
-});
-app.get('/api/channels/:id/messages', authenticateToken, (req, res) => {
-  const access = canAccessRoom(req.user.userId, req.params.id);
-  if (!access.ok) return res.status(access.status).json({ error: access.error });
-  const before = Number(req.query.before) || 0;
-  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
-  const rows = messageQueries.getPage.all(req.params.id, before, before, limit);
-  const messages = rows.reverse().map((m) => ({
-    ...m,
-    content: m.is_deleted ? 'This message was deleted.' : (m.content ?? m.encrypted_content ?? ''),
-    reactions: messageQueries.getReactions.all(m.id),
-  }));
-  res.json({ messages, hasMore: rows.length === limit });
-});
-app.get('/api/conversations/:id/messages', authenticateToken, (req, res) => {
-  const access = canAccessRoom(req.user.userId, req.params.id);
-  if (!access.ok) return res.status(access.status).json({ error: access.error });
-  const before = Number(req.query.before) || 0;
-  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
-  const rows = messageQueries.getPage.all(req.params.id, before, before, limit);
-  const messages = rows.reverse().map((m) => ({
-    ...m,
-    content: m.is_deleted ? 'This message was deleted.' : (m.content ?? m.encrypted_content ?? ''),
-    reactions: messageQueries.getReactions.all(m.id),
-  }));
-  res.json({ messages, hasMore: rows.length === limit });
-});
-app.get('/api/conversations', authenticateToken, (req, res) => {
-  const rooms = roomQueries.getUserRooms.all(req.user.userId).filter((r) => r.type === 'dm');
-  res.json({ conversations: rooms, rooms });
-});
-app.post('/api/conversations', authenticateToken, (req, res) => {
-  const targetUserId = req.body.targetUserId || req.body.userId;
-  if (!targetUserId) return res.status(400).json({ error: 'Target user required' });
-  if (targetUserId === req.user.userId) return res.status(400).json({ error: 'You cannot DM yourself' });
-  const myId = req.user.userId;
-  const target = userQueries.findById.get(targetUserId);
-  if (!target) return res.status(404).json({ error: 'User not found' });
+// Spec-compatible aliases
+app.get('/api/channels', authenticateToken, async (req, res) => {
   try {
-    if (isDMBlocked(myId, targetUserId)) {
-      return res.status(403).json({ error: 'Cannot start this chat (blocked)' });
-    }
-  } catch {}
-  const allRooms = roomQueries.findAll.all();
-  const existingDm = allRooms.find(r => {
-    if (r.type !== 'dm') return false;
-    const ids = roomQueries.getMembers.all(r.id).map(m => m.id);
-    return ids.includes(myId) && ids.includes(targetUserId) && ids.length === 2;
-  });
-  if (existingDm) return res.json({ room: existingDm, conversation: existingDm });
-  const id = uuidv4();
-  const me = userQueries.findById.get(myId);
-  roomQueries.create.run({ id, name: `${me.username}-${target.username}`, description: 'Direct message', type: 'dm', max_members: null, created_by: myId });
-  roomQueries.addMember.run(id, myId);
-  roomQueries.addMember.run(id, targetUserId);
-  const room = roomQueries.findById.get(id);
-  res.status(201).json({ room, conversation: room });
+    const rooms = (await roomQueries.findAll.all()).filter((r) => r.type === 'channel');
+    res.json({ channels: rooms, rooms });
+  } catch { res.status(500).json({ error: 'Failed' }); }
 });
 
-// REST message send/edit/delete (socket is primary for realtime; REST kept for spec + tests)
-app.post('/api/messages', authenticateToken, messageLimiter, (req, res) => {
-  const created = createMessage(req.user.userId, req.body);
-  if (created.error) return res.status(created.status).json({ error: created.error });
-  io.to(`room:${created.message.room_id}`).emit('message:new', created.message);
-  res.status(201).json({ message: created.message });
+app.get('/api/channels/:id/messages', authenticateToken, async (req, res) => {
+  try {
+    const access = await canAccessRoom(req.user.userId, req.params.id);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const before = Number(req.query.before) || 0;
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+    const rows = await messageQueries.getPage.all(req.params.id, before, before, limit);
+    const messages = await Promise.all(rows.reverse().map(async (m) => ({
+      ...m,
+      content: m.is_deleted ? 'This message was deleted.' : (m.content ?? m.encrypted_content ?? ''),
+      reactions: await messageQueries.getReactions.all(m.id),
+    })));
+    res.json({ messages, hasMore: rows.length === limit });
+  } catch { res.status(500).json({ error: 'Failed' }); }
 });
-app.patch('/api/messages/:id', authenticateToken, (req, res) => {
-  const edited = editMessage(req.user.userId, req.params.id, req.body?.content);
-  if (edited.error) return res.status(edited.status).json({ error: edited.error });
-  io.to(`room:${edited.message.room_id}`).emit('message:edited', edited.message);
-  res.json({ message: edited.message });
+
+app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
+  try {
+    const access = await canAccessRoom(req.user.userId, req.params.id);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const before = Number(req.query.before) || 0;
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+    const rows = await messageQueries.getPage.all(req.params.id, before, before, limit);
+    const messages = await Promise.all(rows.reverse().map(async (m) => ({
+      ...m,
+      content: m.is_deleted ? 'This message was deleted.' : (m.content ?? m.encrypted_content ?? ''),
+      reactions: await messageQueries.getReactions.all(m.id),
+    })));
+    res.json({ messages, hasMore: rows.length === limit });
+  } catch { res.status(500).json({ error: 'Failed' }); }
 });
-app.delete('/api/messages/:id', authenticateToken, (req, res) => {
-  const result = deleteMessage(req.user.userId, req.params.id);
-  if (result.error) return res.status(result.status).json({ error: result.error });
-  io.to(`room:${result.roomId}`).emit('message:deleted', { messageId: req.params.id, roomId: result.roomId });
-  res.json({ success: true });
+
+app.get('/api/conversations', authenticateToken, async (req, res) => {
+  try {
+    const rooms = (await roomQueries.getUserRooms.all(req.user.userId)).filter((r) => r.type === 'dm');
+    res.json({ conversations: rooms, rooms });
+  } catch { res.status(500).json({ error: 'Failed' }); }
+});
+
+app.post('/api/conversations', authenticateToken, async (req, res) => {
+  try {
+    const targetUserId = req.body.targetUserId || req.body.userId;
+    if (!targetUserId) return res.status(400).json({ error: 'Target user required' });
+    if (targetUserId === req.user.userId) return res.status(400).json({ error: 'You cannot DM yourself' });
+    const myId = req.user.userId;
+    const target = await userQueries.findById.get(targetUserId);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    try {
+      if (await isDMBlocked(myId, targetUserId)) return res.status(403).json({ error: 'Cannot start this chat (blocked)' });
+    } catch {}
+    const allRooms = await roomQueries.findAll.all();
+    let existingDm = null;
+    for (const r of allRooms) {
+      if (r.type !== 'dm') continue;
+      const members = await roomQueries.getMembers.all(r.id);
+      const ids = members.map((m) => m.id);
+      if (ids.includes(myId) && ids.includes(targetUserId) && ids.length === 2) { existingDm = r; break; }
+    }
+    if (existingDm) return res.json({ room: existingDm, conversation: existingDm });
+    const id = uuidv4();
+    const me = await userQueries.findById.get(myId);
+    await roomQueries.create.run({ id, name: `${me.username}-${target.username}`, description: 'Direct message', type: 'dm', max_members: null, created_by: myId });
+    await roomQueries.addMember.run(id, myId);
+    await roomQueries.addMember.run(id, targetUserId);
+    const room = await roomQueries.findById.get(id);
+    res.status(201).json({ room, conversation: room });
+  } catch (err) {
+    console.error('POST /conversations error:', err);
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// REST message endpoints
+app.post('/api/messages', authenticateToken, messageLimiter, async (req, res) => {
+  try {
+    const created = await createMessage(req.user.userId, req.body);
+    if (created.error) return res.status(created.status).json({ error: created.error });
+    io.to(`room:${created.message.room_id}`).emit('message:new', created.message);
+    res.status(201).json({ message: created.message });
+  } catch (err) {
+    console.error('POST /messages error:', err);
+    res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
+app.patch('/api/messages/:id', authenticateToken, async (req, res) => {
+  try {
+    const edited = await editMessage(req.user.userId, req.params.id, req.body?.content);
+    if (edited.error) return res.status(edited.status).json({ error: edited.error });
+    io.to(`room:${edited.message.room_id}`).emit('message:edited', edited.message);
+    res.json({ message: edited.message });
+  } catch { res.status(500).json({ error: 'Failed' }); }
+});
+
+app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
+  try {
+    const result = await deleteMessage(req.user.userId, req.params.id);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    io.to(`room:${result.roomId}`).emit('message:deleted', { messageId: req.params.id, roomId: result.roomId });
+    res.json({ success: true });
+  } catch { res.status(500).json({ error: 'Failed' }); }
 });
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: Date.now() }));
 
-// --- Shared message logic (used by both REST and sockets) ---
-function toWireMessage(row) {
+// --- Shared async message helpers ---
+async function toWireMessage(row) {
   return {
     ...row,
     content: row.is_deleted ? 'This message was deleted.' : (row.content ?? row.encrypted_content ?? ''),
-    reactions: messageQueries.getReactions.all(row.id),
+    reactions: await messageQueries.getReactions.all(row.id),
   };
 }
 
-function createMessage(userId, body) {
+async function createMessage(userId, body) {
   const { roomId, content, encryptedContent, type, fileId, fileName, fileSize, fileMime, replyTo } = body || {};
   if (!roomId) return { error: 'roomId required', status: 400 };
-  const room = roomQueries.findById.get(roomId);
+  const room = await roomQueries.findById.get(roomId);
   if (!room) return { error: 'Room not found', status: 404 };
-  // Level-2 chat mute: no typing/sending in any space or group — DMs still allowed.
-  if (room.type !== 'dm' && isChatMuted(userId)) {
+
+  if (room.type !== 'dm' && (await isChatMuted(userId))) {
     return { error: 'You are muted from chatting (admin mute)', status: 403 };
   }
   if (room.type === 'dm') {
-    const member = roomQueries.isMember.get(roomId, userId);
+    const member = await roomQueries.isMember.get(roomId, userId);
     if (!member) return { error: 'You are not part of this conversation', status: 403 };
-    // DM block: if either side blocked the other, nobody can message that DM.
     try {
-      const members = roomQueries.getMembers.all(roomId);
+      const members = await roomQueries.getMembers.all(roomId);
       const other = members.find((m) => m.id !== userId);
-      if (other && isDMBlocked(userId, other.id)) {
+      if (other && (await isDMBlocked(userId, other.id))) {
         return { error: 'Cannot message this chat (blocked)', status: 403 };
       }
     } catch {}
   } else {
-    // Sending auto-joins public spaces (text chat is unlimited — voice caps
-    // are enforced separately at call-join time in voice.js).
-    try { roomQueries.addMember.run(roomId, userId); } catch {}
+    try { await roomQueries.addMember.run(roomId, userId); } catch {}
   }
+
   const text = sanitizeMessageContent(
     (typeof content === 'string' && content) || encryptedContent || '',
     MESSAGE_MAX_LENGTH
@@ -191,18 +209,16 @@ function createMessage(userId, body) {
   }
   if (msgType === 'text' && !text) return { error: 'Message cannot be empty', status: 400 };
   if (replyTo) {
-    const parent = messageQueries.findById.get(replyTo);
+    const parent = await messageQueries.findById.get(replyTo);
     if (!parent || parent.room_id !== roomId) return { error: 'Invalid reply target', status: 400 };
   }
-  const user = userQueries.findById.get(userId);
+  const user = await userQueries.findById.get(userId);
   if (!user) return { error: 'User not found', status: 404 };
+
   const id = uuidv4();
-  messageQueries.insert.run({
-    id,
-    room_id: roomId,
-    sender_id: userId,
-    encrypted_content: text,
-    content: text,
+  await messageQueries.insert.run({
+    id, room_id: roomId, sender_id: userId,
+    encrypted_content: text, content: text,
     type: msgType,
     file_id: fileId || null,
     file_name: fileName ? String(fileName).slice(0, 255) : null,
@@ -210,72 +226,58 @@ function createMessage(userId, body) {
     file_mime: fileMime ? String(fileMime).slice(0, 127) : null,
     reply_to: replyTo || null,
   });
-  const row = messageQueries.findById.get(id);
+  const row = await messageQueries.findById.get(id);
   const message = {
-    id,
-    room_id: roomId,
-    sender_id: userId,
-    content: text,
-    encrypted_content: text,
-    type: msgType,
-    file_id: fileId || null,
-    file_name: fileName || null,
-    file_size: fileSize ?? null,
-    file_mime: fileMime || null,
+    id, room_id: roomId, sender_id: userId,
+    content: text, encrypted_content: text, type: msgType,
+    file_id: fileId || null, file_name: fileName || null,
+    file_size: fileSize ?? null, file_mime: fileMime || null,
     reply_to: replyTo || null,
     created_at: row?.created_at ?? Math.floor(Date.now() / 1000),
-    username: user.username,
-    display_name: user.display_name,
-    avatar_color: user.avatar_color,
+    username: user.username, display_name: user.display_name, avatar_color: user.avatar_color,
     reactions: [],
   };
   return { message };
 }
 
-function editMessage(userId, messageId, content) {
-  const existing = messageQueries.findById.get(messageId);
+async function editMessage(userId, messageId, content) {
+  const existing = await messageQueries.findById.get(messageId);
   if (!existing) return { error: 'Message not found', status: 404 };
   if (existing.sender_id !== userId) return { error: 'You can only edit your own messages', status: 403 };
   if (existing.is_deleted) return { error: 'Cannot edit a deleted message', status: 400 };
   const text = sanitizeMessageContent(content || '', MESSAGE_MAX_LENGTH);
   if (!text) return { error: 'Message cannot be empty', status: 400 };
-  messageQueries.edit.run(text, text, messageId);
-  const row = messageQueries.findById.get(messageId);
-  const user = userQueries.findById.get(userId);
+  await messageQueries.edit.run(text, text, messageId);
+  const row = await messageQueries.findById.get(messageId);
+  const user = await userQueries.findById.get(userId);
   return {
     message: {
-      ...row,
-      content: text,
-      encrypted_content: text,
-      username: user?.username,
-      display_name: user?.display_name,
-      avatar_color: user?.avatar_color,
-      reactions: messageQueries.getReactions.all(messageId),
+      ...row, content: text, encrypted_content: text,
+      username: user?.username, display_name: user?.display_name, avatar_color: user?.avatar_color,
+      reactions: await messageQueries.getReactions.all(messageId),
     },
   };
 }
 
-function deleteMessage(userId, messageId) {
-  const existing = messageQueries.findById.get(messageId);
+async function deleteMessage(userId, messageId) {
+  const existing = await messageQueries.findById.get(messageId);
   if (!existing) return { error: 'Message not found', status: 404 };
-  const me = userQueries.findById.get(userId);
+  const me = await userQueries.findById.get(userId);
   const isAdmin = me?.role === 'admin';
   if (existing.sender_id !== userId && !isAdmin) {
     return { error: 'You can only delete your own messages', status: 403 };
   }
-  // Soft delete: keep the record, show placeholder (spec requirement).
-  messageQueries.softDelete.run('', '', messageId);
+  await messageQueries.softDelete.run('', '', messageId);
   return { roomId: existing.room_id };
 }
 
-// --- Socket.io Auth Middleware (server determines identity — never trust client userId) ---
-io.use((socket, next) => {
+// --- Socket.io Auth Middleware ---
+io.use(async (socket, next) => {
   const token = socket.handshake.auth.token;
   if (!token) return next(new Error('Authentication required'));
-
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const raw = userQueries.findRawById.get(payload.userId);
+    const raw = await userQueries.findRawById.get(payload.userId);
     if (!raw) return next(new Error('User not found'));
     if (raw.is_disabled) return next(new Error('Account disabled'));
     socket.userId = payload.userId;
@@ -286,30 +288,30 @@ io.use((socket, next) => {
   }
 });
 
-// Track connected users: userId → Set<socketId> (multi-tab safe presence)
-const userSockets = new Map(); // userId → Set(socketId)
-const connectedUsers = new Map(); // legacy compat: userId → socketId (last seen)
+// Presence tracking
+const userSockets = new Map();
+const connectedUsers = new Map();
 
-function markOnline(userId, socketId) {
+async function markOnline(userId, socketId) {
   let set = userSockets.get(userId);
   if (!set) { set = new Set(); userSockets.set(userId, set); }
   const wasOffline = set.size === 0;
   set.add(socketId);
   connectedUsers.set(userId, socketId);
   if (wasOffline) {
-    try { userQueries.updateStatus.run('online', userId); } catch {}
+    try { await userQueries.updateStatus.run('online', userId); } catch {}
     io.emit('user:online', { userId });
     io.emit('user:status', { userId, status: 'online' });
   }
 }
 
-function markOfflineSocket(userId, socketId) {
+async function markOfflineSocket(userId, socketId) {
   const set = userSockets.get(userId);
   if (set) set.delete(socketId);
   if (!set || set.size === 0) {
     userSockets.delete(userId);
     connectedUsers.delete(userId);
-    try { userQueries.updateStatus.run('offline', userId); } catch {}
+    try { await userQueries.updateStatus.run('offline', userId); } catch {}
     io.emit('user:offline', { userId });
     io.emit('user:status', { userId, status: 'offline' });
   }
@@ -320,32 +322,25 @@ io.on('connection', (socket) => {
   console.log(`✓ Connected: ${socket.username} (${socket.userId})`);
 
   markOnline(socket.userId, socket.id);
-
-  // Send current voice state
   socket.emit('voice:initial_state', getVoiceChannelState());
 
-  // --- Join a text room (DM membership enforced server-side; text unlimited) ---
-  socket.on('room:join', ({ roomId }) => {
+  socket.on('room:join', async ({ roomId }) => {
     try {
       if (!roomId) return;
-      const access = canAccessRoom(socket.userId, roomId);
-      if (!access.ok) {
-        socket.emit('error', { message: access.error });
-        return;
-      }
+      const access = await canAccessRoom(socket.userId, roomId);
+      if (!access.ok) { socket.emit('error', { message: access.error }); return; }
       const room = access.room;
       if (room.type === 'channel') {
-        try { roomQueries.addMember.run(roomId, socket.userId); } catch {}
-        emitOccupancy(roomId, io); // member count changed → live sidebars
+        try { await roomQueries.addMember.run(roomId, socket.userId); } catch {}
+        await emitOccupancy(roomId, io);
       }
       socket.join(`room:${roomId}`);
-      // Send last 50 messages (paginated REST available for older history)
-      const raw = messageQueries.getByRoom.all(roomId).slice(-50);
-      const messages = raw.map((m) => ({
+      const raw = (await messageQueries.getByRoom.all(roomId)).slice(-50);
+      const messages = await Promise.all(raw.map(async (m) => ({
         ...m,
         content: m.is_deleted ? 'This message was deleted.' : (m.content ?? m.encrypted_content ?? ''),
-        reactions: messageQueries.getReactions.all(m.id),
-      }));
+        reactions: await messageQueries.getReactions.all(m.id),
+      })));
       socket.emit('messages:history', { roomId, messages });
     } catch (err) {
       console.error('room:join error:', err);
@@ -354,22 +349,15 @@ io.on('connection', (socket) => {
 
   socket.on('room:leave', ({ roomId }) => {
     socket.leave(`room:${roomId}`);
-    // Text membership is sticky — leaving the socket room never removes the
-    // DB member row (explicit Leave via REST still does).
   });
 
-  // --- Send message (plain text, validated + persisted, then broadcast) ---
-  socket.on('message:send', (payload) => {
+  socket.on('message:send', async (payload) => {
     try {
-      const created = createMessage(socket.userId, payload || {});
-      if (created.error) {
-        socket.emit('error', { message: created.error });
-        return;
-      }
+      const created = await createMessage(socket.userId, payload || {});
+      if (created.error) { socket.emit('error', { message: created.error }); return; }
       io.to(`room:${created.message.room_id}`).emit('message:new', created.message);
       io.to(`room:${created.message.room_id}`).emit('message:read', {
-        roomId: created.message.room_id,
-        messageId: created.message.id,
+        roomId: created.message.room_id, messageId: created.message.id,
       });
     } catch (err) {
       console.error('Message send error:', err);
@@ -377,15 +365,11 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Edit message (owner only) ---
-  socket.on('message:edit', ({ messageId, content }) => {
+  socket.on('message:edit', async ({ messageId, content }) => {
     try {
       if (!messageId) return;
-      const edited = editMessage(socket.userId, messageId, content);
-      if (edited.error) {
-        socket.emit('error', { message: edited.error });
-        return;
-      }
+      const edited = await editMessage(socket.userId, messageId, content);
+      if (edited.error) { socket.emit('error', { message: edited.error }); return; }
       io.to(`room:${edited.message.room_id}`).emit('message:edited', edited.message);
       io.to(`room:${edited.message.room_id}`).emit('message:new', edited.message);
     } catch (err) {
@@ -393,15 +377,11 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Delete message (owner or admin, soft delete) ---
-  socket.on('message:delete', ({ messageId, roomId }) => {
+  socket.on('message:delete', async ({ messageId, roomId }) => {
     try {
       if (!messageId) return;
-      const result = deleteMessage(socket.userId, messageId);
-      if (result.error) {
-        socket.emit('error', { message: result.error });
-        return;
-      }
+      const result = await deleteMessage(socket.userId, messageId);
+      if (result.error) { socket.emit('error', { message: result.error }); return; }
       const targetRoom = roomId || result.roomId;
       io.to(`room:${targetRoom}`).emit('message:deleted', { messageId, roomId: targetRoom });
     } catch (err) {
@@ -409,182 +389,149 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Mark room as read (read receipts / unread counts) ---
-  socket.on('message:read', ({ roomId }) => {
+  socket.on('message:read', async ({ roomId }) => {
     try {
       if (!roomId) return;
-      const access = canAccessRoom(socket.userId, roomId);
+      const access = await canAccessRoom(socket.userId, roomId);
       if (!access.ok) return;
-      try { readQueries.markRead.run(roomId, socket.userId); } catch {}
+      try { await readQueries.markRead.run(roomId, socket.userId); } catch {}
       socket.to(`room:${roomId}`).emit('message:read', {
-        roomId,
-        userId: socket.userId,
-        at: Math.floor(Date.now() / 1000),
+        roomId, userId: socket.userId, at: Math.floor(Date.now() / 1000),
       });
     } catch (err) {
       console.error('Read error:', err);
     }
   });
 
-  // --- Reactions: exactly one per user per message (new react swaps the old) ---
-  socket.on('message:react', ({ messageId, emoji, roomId }) => {
+  socket.on('message:react', async ({ messageId, emoji, roomId }) => {
     try {
       if (!messageId || !emoji) return;
       const clean = String(emoji).trim().slice(0, 16);
-      // Must be a single emoji grapheme (allow ZWJ sequences), not text.
       if (!clean || [...clean].length > 8) return;
-      replaceReaction(messageId, socket.userId, clean);
-      const reactions = messageQueries.getReactions.all(messageId);
+      await replaceReaction(messageId, socket.userId, clean);
+      const reactions = await messageQueries.getReactions.all(messageId);
       io.to(`room:${roomId}`).emit('message:reactions_update', { messageId, reactions });
     } catch (err) {
       console.error('React error:', err);
     }
   });
 
-  socket.on('message:unreact', ({ messageId, emoji, roomId }) => {
+  socket.on('message:unreact', async ({ messageId, emoji, roomId }) => {
     try {
       if (!messageId || !emoji) return;
-      messageQueries.removeReaction.run(messageId, socket.userId, emoji);
-      const reactions = messageQueries.getReactions.all(messageId);
+      await messageQueries.removeReaction.run(messageId, socket.userId, emoji);
+      const reactions = await messageQueries.getReactions.all(messageId);
       io.to(`room:${roomId}`).emit('message:reactions_update', { messageId, reactions });
     } catch (err) {
       console.error('Unreact error:', err);
     }
   });
 
-  // --- Typing indicators (chat-muted users stay silent in spaces) ---
-  socket.on('typing:start', ({ roomId }) => {
+  socket.on('typing:start', async ({ roomId }) => {
     if (!roomId) return;
-    const access = canAccessRoom(socket.userId, roomId);
-    if (!access.ok) return;
-    if (access.room.type !== 'dm' && isChatMuted(socket.userId)) return;
-    socket.to(`room:${roomId}`).emit('typing:start', { userId: socket.userId, username: socket.username, roomId });
-    socket.to(`room:${roomId}`).emit('typing:update', {
-      userId: socket.userId,
-      username: socket.username,
-      roomId,
-      typing: true,
-    });
+    try {
+      const access = await canAccessRoom(socket.userId, roomId);
+      if (!access.ok) return;
+      if (access.room.type !== 'dm' && (await isChatMuted(socket.userId))) return;
+      socket.to(`room:${roomId}`).emit('typing:start', { userId: socket.userId, username: socket.username, roomId });
+      socket.to(`room:${roomId}`).emit('typing:update', { userId: socket.userId, username: socket.username, roomId, typing: true });
+    } catch {}
   });
 
   socket.on('typing:stop', ({ roomId }) => {
     if (!roomId) return;
     socket.to(`room:${roomId}`).emit('typing:stop', { userId: socket.userId, username: socket.username, roomId });
-    socket.to(`room:${roomId}`).emit('typing:update', {
-      userId: socket.userId,
-      username: socket.username,
-      roomId,
-      typing: false,
-    });
+    socket.to(`room:${roomId}`).emit('typing:update', { userId: socket.userId, username: socket.username, roomId, typing: false });
   });
 
-  // --- Room created event relay ---
   socket.on('room:created', (room) => {
     io.emit('room:new', room);
   });
 
-  // --- Watch together: persist + broadcast per-room player state ---
-  const emitWatch = (roomId) => {
+  // Watch together
+  const emitWatch = async (roomId) => {
     try {
-      const state = watchQueries.get.get(roomId);
+      const state = await watchQueries.get.get(roomId);
       if (state) io.to(`room:${roomId}`).emit('watch:update', { watch: state });
     } catch {}
   };
-  socket.on('watch:set', ({ roomId, url, videoId }) => {
+
+  socket.on('watch:set', async ({ roomId, url, videoId }) => {
     try {
       if (!roomId) return;
-      const access = canAccessRoom(socket.userId, roomId);
-      if (!access.ok) {
-        socket.emit('error', { message: access.error });
-        return;
-      }
+      const access = await canAccessRoom(socket.userId, roomId);
+      if (!access.ok) { socket.emit('error', { message: access.error }); return; }
       const raw = String(videoId || url || '').slice(0, 500);
       if (!raw) {
-        try { watchQueries.clear.run(roomId); } catch {}
-        io.to(`room:${roomId}`).emit('watch:update', {
-          watch: { room_id: roomId, video_id: '', url: '', is_playing: 0, position: 0 },
-        });
+        try { await watchQueries.clear.run(roomId); } catch {}
+        io.to(`room:${roomId}`).emit('watch:update', { watch: { room_id: roomId, video_id: '', url: '', is_playing: 0, position: 0 } });
         return;
       }
       const vid = extractYouTubeId(raw);
-      if (!vid) {
-        socket.emit('error', { message: 'Send a valid YouTube link' });
-        return;
-      }
-      watchQueries.set.run(roomId, vid, `https://www.youtube.com/watch?v=${vid}`, 1, 0, socket.userId);
-      emitWatch(roomId);
+      if (!vid) { socket.emit('error', { message: 'Send a valid YouTube link' }); return; }
+      await watchQueries.set.run(roomId, vid, `https://www.youtube.com/watch?v=${vid}`, 1, 0, socket.userId);
+      await emitWatch(roomId);
     } catch (err) {
       console.error('watch:set error:', err);
     }
   });
-  socket.on('watch:state', ({ roomId, is_playing, position }) => {
+
+  socket.on('watch:state', async ({ roomId, is_playing, position }) => {
     try {
       if (!roomId) return;
-      const access = canAccessRoom(socket.userId, roomId);
+      const access = await canAccessRoom(socket.userId, roomId);
       if (!access.ok) return;
-      const cur = watchQueries.get.get(roomId);
+      const cur = await watchQueries.get.get(roomId);
       if (!cur?.video_id) return;
       const pos = Math.max(0, Math.min(Number(position) || 0, 86400));
-      watchQueries.updateState.run(is_playing ? 1 : 0, pos, roomId);
-      emitWatch(roomId);
+      await watchQueries.updateState.run(is_playing ? 1 : 0, pos, roomId);
+      await emitWatch(roomId);
     } catch (err) {
       console.error('watch:state error:', err);
     }
   });
 
-  // --- Tic-tac-toe: shared board per room, broadcast to room viewers ---
-  socket.on('game:move', ({ roomId, index }) => {
+  // Tic-tac-toe
+  socket.on('game:move', async ({ roomId, index }) => {
     try {
       if (!roomId) return;
-      const access = canAccessRoom(socket.userId, roomId);
-      if (!access.ok) {
-        socket.emit('error', { message: access.error });
-        return;
-      }
-      const result = applyGameMove(roomId, socket.userId, index);
-      if (result.error) {
-        socket.emit('error', { message: result.error });
-        return;
-      }
-      emitGame(roomId, io);
+      const access = await canAccessRoom(socket.userId, roomId);
+      if (!access.ok) { socket.emit('error', { message: access.error }); return; }
+      const result = await applyGameMove(roomId, socket.userId, index);
+      if (result.error) { socket.emit('error', { message: result.error }); return; }
+      await emitGame(roomId, io);
     } catch (err) {
       console.error('game:move error:', err);
     }
   });
 
-  socket.on('game:reset', ({ roomId }) => {
+  socket.on('game:reset', async ({ roomId }) => {
     try {
       if (!roomId) return;
-      const access = canAccessRoom(socket.userId, roomId);
-      if (!access.ok) {
-        socket.emit('error', { message: access.error });
-        return;
-      }
-      resetGame(roomId);
-      emitGame(roomId, io);
+      const access = await canAccessRoom(socket.userId, roomId);
+      if (!access.ok) { socket.emit('error', { message: access.error }); return; }
+      await resetGame(roomId);
+      await emitGame(roomId, io);
     } catch (err) {
       console.error('game:reset error:', err);
     }
   });
-  // --- Disconnect (multi-tab safe; text membership is sticky) ---
+
   socket.on('disconnect', () => {
     console.log(`✗ Disconnected: ${socket.username}`);
-    // Disconnect only affects presence.
-    // (Voice seats are freed by the voice disconnect handler.)
     markOfflineSocket(socket.userId, socket.id);
   });
 });
 
-// Set up WebRTC voice signaling
 setupVoiceSignaling(io, connectedUsers);
 setRoomsIO(io);
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`
   ╔═══════════════════════════════╗
-  ║   SecureChat Server v2.0.0    ║
+  ║   TeaChat Server v3.0.0       ║
   ║   Running on port ${PORT}         ║
-  ║   Client(s): ${CLIENT_URLS.join(', ')}  ║
+  ║   DB: ${process.env.TURSO_URL ? 'Turso Cloud' : 'Local SQLite'}          ║
   ╚═══════════════════════════════╝
   `);
 });

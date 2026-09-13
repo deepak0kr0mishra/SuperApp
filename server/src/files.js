@@ -9,7 +9,6 @@ import { fileQueries, roomQueries, DATA_DIR } from './db.js';
 import { authenticateToken } from './auth.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'securechat_secret_key_change_in_prod';
-
 const UPLOADS_DIR = join(DATA_DIR, 'uploads');
 mkdirSync(UPLOADS_DIR, { recursive: true });
 
@@ -23,13 +22,8 @@ const storage = multer.diskStorage({
   },
 });
 
-const upload = multer({
-  storage,
-  limits: { fileSize: 55 * 1024 * 1024 }, // 55MB max
-});
+const upload = multer({ storage, limits: { fileSize: 55 * 1024 * 1024 } });
 
-// Auth for media tags (<img>/<video>/<audio> can't send Authorization
-// headers, so they append ?token=JWT). Accepts header OR query token.
 function authenticateMedia(req, res, next) {
   const header = req.headers['authorization'];
   let token = header && header.split(' ')[1];
@@ -59,29 +53,28 @@ function safeInlineType(mime) {
   return base || 'application/octet-stream';
 }
 
-// POST /api/files/upload — upload a plain file (no E2E encryption)
-router.post('/upload', authenticateToken, upload.single('file'), (req, res) => {
+// POST /api/files/upload
+router.post('/upload', authenticateToken, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const { roomId } = req.body;
     if (!roomId) return res.status(400).json({ error: 'roomId required' });
 
-    const room = roomQueries.findById.get(roomId);
+    const room = await roomQueries.findById.get(roomId);
     if (!room) return res.status(404).json({ error: 'Room not found' });
     if (room.type === 'dm') {
-      const member = roomQueries.isMember.get(roomId, req.user.userId);
+      const member = await roomQueries.isMember.get(roomId, req.user.userId);
       if (!member) return res.status(403).json({ error: 'You are not part of this conversation' });
     } else {
-      try { roomQueries.addMember.run(roomId, req.user.userId); } catch {}
+      try { await roomQueries.addMember.run(roomId, req.user.userId); } catch {}
     }
 
     const id = uuidv4();
-    fileQueries.insert.run({
+    await fileQueries.insert.run({
       id,
       uploader_id: req.user.userId,
       room_id: roomId,
       file_name: req.file.originalname,
-      // Store actual size on disk (the encrypted blob size)
       file_size: req.file.size,
       mime_type: req.file.mimetype,
       path: req.file.filename,
@@ -99,18 +92,13 @@ router.post('/upload', authenticateToken, upload.single('file'), (req, res) => {
   }
 });
 
-// GET /api/files/:id — download or inline-view a file.
-// Images / video / audio are served inline with the real Content-Type so
-// they render directly in chat (<img>, <video>, <audio>). Use
-// ?token=JWT for media tags. Supports Range requests for video/audio
-// streaming on mobile. Other types download as attachment.
+// GET /api/files/:id
 router.get('/:id', authenticateMedia, async (req, res) => {
   try {
-    const file = fileQueries.findById.get(req.params.id);
+    const file = await fileQueries.findById.get(req.params.id);
     if (!file) return res.status(404).json({ error: 'File not found' });
 
     const filePath = join(UPLOADS_DIR, file.path);
-
     let fileStat;
     try {
       fileStat = await stat(filePath);
@@ -118,8 +106,6 @@ router.get('/:id', authenticateMedia, async (req, res) => {
       return res.status(404).json({ error: 'File data not found on disk' });
     }
 
-    // Serve inline so chat can render images / video / audio directly.
-    // (Old E2E blobs were octet-stream attachments — that broke previews.)
     const contentType = safeInlineType(file.mime_type);
     const isInline =
       contentType.startsWith('image/') ||
@@ -135,7 +121,6 @@ router.get('/:id', authenticateMedia, async (req, res) => {
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cache-Control', 'private, max-age=31536000');
 
-    // Range support (mobile video/audio scrubbing)
     const range = req.headers.range;
     if (range && (contentType.startsWith('video/') || contentType.startsWith('audio/'))) {
       const match = /bytes=(\d*)-(\d*)/.exec(range);
@@ -157,7 +142,6 @@ router.get('/:id', authenticateMedia, async (req, res) => {
     }
 
     res.setHeader('Content-Length', fileStat.size);
-
     createReadStream(filePath).pipe(res);
   } catch (err) {
     console.error('Download error:', err);

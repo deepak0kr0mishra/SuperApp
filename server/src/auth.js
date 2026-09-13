@@ -2,14 +2,8 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
-import { userQueries, roomQueries, generateUserCode } from './db.js';
-import { generateUID } from './db.js';
-import {
-  authLimiter,
-  validateUsername,
-  validateEmail,
-  validatePassword,
-} from './security.js';
+import { userQueries, roomQueries, generateUserCode, generateUID } from './db.js';
+import { authLimiter, validateUsername, validateEmail, validatePassword } from './security.js';
 
 const router = express.Router();
 
@@ -17,7 +11,6 @@ const AVATAR_COLORS = [
   '#6366f1', '#8b5cf6', '#ec4899', '#f59e0b',
   '#10b981', '#3b82f6', '#ef4444', '#06b6d4',
 ];
-
 const randomColor = () => AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 
 function signToken(user) {
@@ -28,8 +21,7 @@ function signToken(user) {
   );
 }
 
-// POST /api/auth/register — { username, email, password, display_name? }
-// Every account receives a permanent 8-char UID (uid) that never changes.
+// POST /api/auth/register
 router.post('/register', authLimiter, async (req, res) => {
   try {
     const { username, email, display_name, password } = req.body;
@@ -43,10 +35,10 @@ router.post('/register', authLimiter, async (req, res) => {
 
     const cleanEmail = String(email).trim().toLowerCase();
 
-    if (userQueries.findByUsername.get(username)) {
+    if (await userQueries.findByUsername.get(username)) {
       return res.status(409).json({ error: 'Username already taken' });
     }
-    if (userQueries.findByEmail.get(cleanEmail)) {
+    if (await userQueries.findByEmail.get(cleanEmail)) {
       return res.status(409).json({ error: 'Email already registered' });
     }
 
@@ -54,11 +46,10 @@ router.post('/register', authLimiter, async (req, res) => {
     const id = uuidv4();
     const displayName = (display_name?.trim() || username).slice(0, 40);
 
-    // Generate unique 6-char legacy code + permanent 8-char UID
     let user_code = null;
     for (let i = 0; i < 10; i++) {
       const candidate = generateUserCode();
-      if (!userQueries.findByCode.get(candidate)) { user_code = candidate; break; }
+      if (!(await userQueries.findByCode.get(candidate))) { user_code = candidate; break; }
     }
     if (!user_code) user_code = generateUserCode() + Date.now().toString(36).slice(-2).toUpperCase();
 
@@ -66,43 +57,30 @@ router.post('/register', authLimiter, async (req, res) => {
     for (let i = 0; i < 20; i++) {
       const candidate = generateUID();
       try {
-        const hit = userQueries.findByUid.get(candidate);
-        if (!hit) { uid = candidate; break; }
+        if (!(await userQueries.findByUid.get(candidate))) { uid = candidate; break; }
       } catch { uid = candidate; break; }
     }
     if (!uid) uid = generateUID();
 
-    // First real user becomes admin
     let role = 'user';
     try {
-      const count = userQueries.count.get();
+      const count = await userQueries.count.get();
       if (count.c === 0) role = 'admin';
     } catch {}
 
-    userQueries.create.run({
-      id,
-      uid,
-      username,
-      email: cleanEmail,
-      display_name: displayName,
-      password_hash,
-      avatar_color: randomColor(),
-      user_code,
-      bio: '',
-      role,
+    await userQueries.create.run({
+      id, uid, username, email: cleanEmail,
+      display_name: displayName, password_hash,
+      avatar_color: randomColor(), user_code, bio: '', role,
     });
 
-    // Auto-join every public space (text chat is unlimited; voice caps
-    // are enforced separately at call-join time).
-    const allRooms = roomQueries.findAll.all();
+    const allRooms = await roomQueries.findAll.all();
     for (const room of allRooms) {
-      if (room.type === 'channel') {
-        roomQueries.addMember.run(room.id, id);
-      }
+      if (room.type === 'channel') await roomQueries.addMember.run(room.id, id);
     }
 
     const token = signToken({ id, username });
-    const user = userQueries.findById.get(id);
+    const user = await userQueries.findById.get(id);
     res.status(201).json({ token, user });
   } catch (err) {
     console.error('Register error:', err);
@@ -110,36 +88,28 @@ router.post('/register', authLimiter, async (req, res) => {
   }
 });
 
-// POST /api/auth/login — { login (username or email), password } + legacy { username, password }
+// POST /api/auth/login
 router.post('/login', authLimiter, async (req, res) => {
   try {
     const loginId = (req.body.login || req.body.username || req.body.email || '').trim();
     const { password } = req.body;
-
     if (!loginId || !password) {
       return res.status(400).json({ error: 'Username/email and password are required' });
     }
-
     const lowered = loginId.toLowerCase();
     const userRecord =
-      userQueries.findByUsername.get(loginId) ||
-      userQueries.findByEmail.get(lowered) ||
-      userQueries.findByLogin.get(loginId, lowered);
+      await userQueries.findByUsername.get(loginId) ||
+      await userQueries.findByEmail.get(lowered) ||
+      await userQueries.findByLogin.get(loginId, lowered);
 
-    if (!userRecord) {
-      return res.status(401).json({ error: 'Invalid username or password' });
-    }
-    if (userRecord.is_disabled) {
-      return res.status(403).json({ error: 'Account has been disabled. Contact an admin.' });
-    }
+    if (!userRecord) return res.status(401).json({ error: 'Invalid username or password' });
+    if (userRecord.is_disabled) return res.status(403).json({ error: 'Account has been disabled. Contact an admin.' });
 
     const valid = await bcrypt.compare(password, userRecord.password_hash);
-    if (!valid) {
-      return res.status(401).json({ error: 'Invalid username or password' });
-    }
+    if (!valid) return res.status(401).json({ error: 'Invalid username or password' });
 
     const token = signToken({ id: userRecord.id, username: userRecord.username });
-    const user = userQueries.findById.get(userRecord.id);
+    const user = await userQueries.findById.get(userRecord.id);
     res.json({ token, user });
   } catch (err) {
     console.error('Login error:', err);
@@ -147,17 +117,12 @@ router.post('/login', authLimiter, async (req, res) => {
   }
 });
 
-// POST /api/auth/logout — stateless JWT; client drops token. Presence handled via socket disconnect.
+// POST /api/auth/logout
 router.post('/logout', authenticateToken, (req, res) => {
   res.json({ success: true });
 });
 
-// POST /api/auth/dev-bypass — LOCAL DEV ONLY. Passwordless one-tap login as
-// the `dev` user for quick testing (gear icon on the login page).
-// HARD RULES: disabled entirely when NODE_ENV=production (Render sets this,
-// so the live site always 403s even if someone crafts the request); only the
-// exact username `dev` + date `1947-08-15` works; the dev account is a plain
-// regular user, never an admin.
+// POST /api/auth/dev-bypass — LOCAL DEV ONLY
 router.post('/dev-bypass', authLimiter, async (req, res) => {
   try {
     if (process.env.NODE_ENV === 'production') {
@@ -169,48 +134,39 @@ router.post('/dev-bypass', authLimiter, async (req, res) => {
     if (username !== 'dev' || !dateOk) {
       return res.status(401).json({ error: 'Invalid dev credentials' });
     }
-    let record = userQueries.findByUsername.get('dev');
+    let record = await userQueries.findByUsername.get('dev');
     if (!record) {
       const id = uuidv4();
       let user_code = null;
       for (let i = 0; i < 10; i++) {
         const candidate = generateUserCode();
-        if (!userQueries.findByCode.get(candidate)) { user_code = candidate; break; }
+        if (!(await userQueries.findByCode.get(candidate))) { user_code = candidate; break; }
       }
       if (!user_code) user_code = generateUserCode();
       let uid = null;
       for (let i = 0; i < 20; i++) {
         const candidate = generateUID();
         try {
-          if (!userQueries.findByUid.get(candidate)) { uid = candidate; break; }
+          if (!(await userQueries.findByUid.get(candidate))) { uid = candidate; break; }
         } catch { uid = candidate; break; }
       }
       if (!uid) uid = generateUID();
       const password_hash = await bcrypt.hash(uuidv4() + Date.now(), 12);
-      userQueries.create.run({
-        id,
-        uid,
-        username: 'dev',
-        email: 'dev@localhost',
-        display_name: 'Dev',
-        password_hash,
-        avatar_color: '#8b5cf6',
-        user_code,
-        bio: 'Local test pilot',
-        role: 'user',
+      await userQueries.create.run({
+        id, uid, username: 'dev', email: 'dev@localhost',
+        display_name: 'Dev', password_hash,
+        avatar_color: '#8b5cf6', user_code, bio: 'Local test pilot', role: 'user',
       });
-      const allRooms = roomQueries.findAll.all();
+      const allRooms = await roomQueries.findAll.all();
       for (const room of allRooms) {
-        if (room.type === 'channel') {
-          roomQueries.addMember.run(room.id, id);
-        }
+        if (room.type === 'channel') await roomQueries.addMember.run(room.id, id);
       }
-      record = userQueries.findByUsername.get('dev');
+      record = await userQueries.findByUsername.get('dev');
     }
     if (!record) return res.status(500).json({ error: 'Could not create dev user' });
     if (record.is_disabled) return res.status(403).json({ error: 'Account disabled' });
     const token = signToken({ id: record.id, username: record.username });
-    const user = userQueries.findById.get(record.id);
+    const user = await userQueries.findById.get(record.id);
     res.json({ token, user });
   } catch (err) {
     console.error('Dev bypass error:', err);
@@ -219,19 +175,23 @@ router.post('/dev-bypass', authLimiter, async (req, res) => {
 });
 
 // GET /api/auth/me
-router.get('/me', authenticateToken, (req, res) => {
-  const user = userQueries.findById.get(req.user.userId);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  if (user.is_disabled) return res.status(403).json({ error: 'Account disabled' });
-  res.json({ user });
+router.get('/me', authenticateToken, async (req, res) => {
+  try {
+    const user = await userQueries.findById.get(req.user.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.is_disabled) return res.status(403).json({ error: 'Account disabled' });
+    res.json({ user });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-// PUT /api/auth/public-key — legacy E2E endpoint, now a no-op.
+// PUT /api/auth/public-key — legacy E2E no-op
 router.put('/public-key', authenticateToken, (req, res) => {
   res.json({ success: true });
 });
 
-// PUT /api/auth/profile — update own display_name / bio
+// PUT /api/auth/profile
 router.put('/profile', authenticateToken, async (req, res) => {
   try {
     let { display_name, bio } = req.body;
@@ -239,30 +199,33 @@ router.put('/profile', authenticateToken, async (req, res) => {
       display_name = String(display_name).trim().slice(0, 40);
       if (!display_name) return res.status(400).json({ error: 'Display name cannot be empty' });
     }
-    if (bio !== undefined) {
-      bio = String(bio).slice(0, 200);
-    }
-    userQueries.updateProfile.run(
+    if (bio !== undefined) bio = String(bio).slice(0, 200);
+
+    await userQueries.updateProfile.run(
       display_name === undefined ? null : display_name,
       bio === undefined ? null : bio,
       req.user.userId
     );
-    // Ensure code/uid exist for legacy users hitting this endpoint
-    let user = userQueries.findById.get(req.user.userId);
+
+    // Ensure code/uid exist for legacy users
+    let user = await userQueries.findById.get(req.user.userId);
     if (!user.user_code || !user.uid) {
       try {
-        const db = (await import('./db.js')).default;
         if (!user.user_code) {
           let code = generateUserCode();
-          for (let i = 0; i < 10 && userQueries.findByCode.get(code); i++) code = generateUserCode();
-          db.prepare('UPDATE users SET user_code = ? WHERE id = ?').run(code, req.user.userId);
+          for (let i = 0; i < 10 && (await userQueries.findByCode.get(code)); i++) code = generateUserCode();
+          await userQueries.updateProfile.run(null, null, req.user.userId); // no-op trigger
+          // Direct execute via db
+          const db = (await import('./db.js')).default;
+          await db.execute({ sql: 'UPDATE users SET user_code = ? WHERE id = ?', args: [code, req.user.userId] });
         }
         if (!user.uid) {
           let uid = generateUID();
-          for (let i = 0; i < 10 && userQueries.findByUid.get(uid); i++) uid = generateUID();
-          db.prepare('UPDATE users SET uid = ? WHERE id = ?').run(uid, req.user.userId);
+          for (let i = 0; i < 10 && (await userQueries.findByUid.get(uid)); i++) uid = generateUID();
+          const db = (await import('./db.js')).default;
+          await db.execute({ sql: 'UPDATE users SET uid = ? WHERE id = ?', args: [uid, req.user.userId] });
         }
-        user = userQueries.findById.get(req.user.userId);
+        user = await userQueries.findById.get(req.user.userId);
       } catch {}
     }
     res.json({ user });
@@ -272,7 +235,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
   }
 });
 
-// PUT /api/auth/password — change own password. { currentPassword, newPassword }
+// PUT /api/auth/password
 router.put('/password', authenticateToken, authLimiter, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -284,12 +247,13 @@ router.put('/password', authenticateToken, authLimiter, async (req, res) => {
     if (currentPassword === newPassword) {
       return res.status(400).json({ error: 'New password must be different' });
     }
-    const raw = userQueries.findRawById?.get(req.user.userId) || userQueries.findByUsername.get(req.user.username);
+    const raw = await userQueries.findRawById.get(req.user.userId) ||
+                await userQueries.findByUsername.get(req.user.username);
     if (!raw) return res.status(404).json({ error: 'User not found' });
     const valid = await bcrypt.compare(currentPassword, raw.password_hash);
     if (!valid) return res.status(401).json({ error: 'Current password is incorrect' });
     const password_hash = await bcrypt.hash(newPassword, 12);
-    userQueries.updatePassword.run(password_hash, req.user.userId);
+    await userQueries.updatePassword.run(password_hash, req.user.userId);
     res.json({ success: true });
   } catch (err) {
     console.error('Password change error:', err);
@@ -297,7 +261,8 @@ router.put('/password', authenticateToken, authLimiter, async (req, res) => {
   }
 });
 
-export function authenticateToken(req, res, next) {
+// authenticateToken — middleware (must stay sync-looking but uses async check)
+export async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
@@ -305,9 +270,8 @@ export function authenticateToken(req, res, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET || 'securechat_secret_key_change_in_prod');
     req.user = payload;
-    // Reject disabled accounts on every authenticated request
     try {
-      const raw = userQueries.findRawById.get(payload.userId);
+      const raw = await userQueries.findRawById.get(payload.userId);
       if (raw?.is_disabled) return res.status(403).json({ error: 'Account disabled' });
     } catch {}
     next();
