@@ -34,9 +34,6 @@ function loadYouTubeAPI() {
 // and resets cleanly when switching rooms.
 export default function WatchTogether({ roomId }) {
   const watch = useChatStore((s) => s.watch[roomId]);
-  const [queueUrl, setQueueUrl] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
   const [apiFailed, setApiFailed] = useState(false);
   const [playerError, setPlayerError] = useState('');
   const [ready, setReady] = useState(false);
@@ -253,28 +250,6 @@ export default function WatchTogether({ roomId }) {
     } catch {}
   };
 
-  const submit = async (e) => {
-    e?.preventDefault();
-    if (!queueUrl.trim() || busy) return;
-    setBusy(true);
-    setError('');
-    setPlayerError('');
-    try {
-      const { watch: w } = await api.setWatch(roomId, { url: queueUrl.trim(), is_playing: true, position: 0 });
-      if (w?.video_id) {
-        useChatStore.getState().setWatch(roomId, w);
-        getSocket()?.emit('watch:set', { roomId, url: queueUrl.trim() });
-        setQueueUrl('');
-      } else {
-        setError('Could not queue that link');
-      }
-    } catch (err) {
-      setError(err.message || 'Could not load that video');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const clear = () => {
     try { playerRef.current?.stopVideo?.(); } catch {}
     useChatStore.getState().setWatch(roomId, { room_id: roomId, video_id: '', url: '', is_playing: 0, position: 0 });
@@ -291,6 +266,9 @@ export default function WatchTogether({ roomId }) {
         <span>📺 Watch together</span>
         {vid && (
           <span className="watch-actions">
+            <span className={`watch-live ${playing ? 'on' : ''}`} title={playing ? 'Playing for everyone' : 'Paused for everyone'}>
+              {playing ? '🔴 LIVE' : '⏸ PAUSED'}
+            </span>
             <button className="btn-mini" onClick={clear} title="Remove video">✕ Clear</button>
           </span>
         )}
@@ -308,12 +286,13 @@ export default function WatchTogether({ roomId }) {
             <div ref={mountRef} className="watch-yt-mount" />
           )}
           {playerError && <div className="form-error" style={{ marginTop: 8 }}>{playerError}</div>}
+          {!ready && !apiFailed && <div className="watch-loading">⏳ Loading player… controls work anyway</div>}
           <div className="watch-controls">
-            <button className="wc-btn" onClick={() => doSkip(-10)} title="Back 10 seconds" disabled={!ready}>⏪<span>10</span></button>
+            <button className="wc-btn" onClick={() => doSkip(-10)} title="Back 10 seconds for everyone">⏪<span>10</span></button>
             <button className="wc-btn wc-play" onClick={doToggle} title={playing ? 'Pause for everyone' : 'Play for everyone'}>
               {playing ? '⏸' : '▶'}
             </button>
-            <button className="wc-btn" onClick={() => doSkip(10)} title="Forward 10 seconds" disabled={!ready}>⏩<span>10</span></button>
+            <button className="wc-btn" onClick={() => doSkip(10)} title="Forward 10 seconds for everyone">⏩<span>10</span></button>
             <span className="wc-time">{formatTime(current)} / {formatTime(duration)}</span>
             <input
               className="wc-seek"
@@ -341,21 +320,9 @@ export default function WatchTogether({ roomId }) {
           </div>
         </div>
       ) : (
-        <div className="watch-empty">No video yet — paste a YouTube link below (or right in chat) and everyone watches in sync ✦</div>
+        // Parent only mounts this card while a video is queued — nothing to show otherwise.
+        null
       )}
-      <form className="watch-form" onSubmit={submit}>
-        <input
-          className="form-input"
-          placeholder="Paste a YouTube link…"
-          value={queueUrl}
-          onChange={(e) => setQueueUrl(e.target.value)}
-          maxLength={500}
-        />
-        <button className="btn-mini primary" type="submit" disabled={busy || !queueUrl.trim()}>
-          {busy ? 'Loading…' : 'Queue'}
-        </button>
-      </form>
-      {error && <div className="form-error">{error}</div>}
     </div>
   );
 }

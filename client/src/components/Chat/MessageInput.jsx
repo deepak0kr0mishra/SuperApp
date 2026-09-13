@@ -52,6 +52,10 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
   const [uploadProgress, setUploadProgress] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [sendError, setSendError] = useState('');
+  const [showYT, setShowYT] = useState(false);
+  const [ytUrl, setYtUrl] = useState('');
+  const [ytBusy, setYtBusy] = useState(false);
+  const [ytError, setYtError] = useState('');
 
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -172,6 +176,30 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
     setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
+  // Queue a YouTube video into the room's Watch-together player.
+  const queueYouTube = async (e) => {
+    e?.preventDefault();
+    const raw = ytUrl.trim();
+    if (!raw || !roomId || ytBusy) return;
+    setYtBusy(true);
+    setYtError('');
+    try {
+      const { watch } = await api.setWatch(roomId, { url: raw, is_playing: true, position: 0 });
+      if (watch?.video_id) {
+        useChatStore.getState().setWatch(roomId, watch);
+        getSocket()?.emit('watch:set', { roomId, url: raw });
+        setYtUrl('');
+        setShowYT(false);
+      } else {
+        setYtError('Could not queue that link');
+      }
+    } catch (err) {
+      setYtError(err.message || 'Send a valid YouTube link');
+    } finally {
+      setYtBusy(false);
+    }
+  };
+
   const activeRoom = rooms.find(r => r.id === roomId);
   const chatMute = (myMutes || []).find(m => m.kind === 'chat');
   const chatMuted = !!chatMute && activeRoom?.type !== 'dm';
@@ -222,6 +250,37 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
           title="Attach photo, video, or file"
           disabled={uploading}
         >📎</button>
+        {activeRoom?.type !== 'dm' && (
+          <div style={{ position: 'relative' }}>
+            <button
+              id="yt-queue-btn"
+              className="input-action-btn"
+              onClick={() => { setShowYT(v => !v); setYtError(''); }}
+              title="Watch together — queue a YouTube video"
+              disabled={uploading}
+            >📺</button>
+            {showYT && (
+              <form className="yt-popup" onSubmit={queueYouTube}>
+                <div className="yt-popup-title">📺 Watch together</div>
+                <input
+                  className="form-input"
+                  placeholder="Paste a YouTube link…"
+                  value={ytUrl}
+                  onChange={(e) => setYtUrl(e.target.value)}
+                  maxLength={500}
+                  autoFocus
+                />
+                {ytError && <div className="form-error" style={{ margin: '8px 0 0' }}>{ytError}</div>}
+                <div className="yt-popup-actions">
+                  <button type="button" className="btn-mini" onClick={() => setShowYT(false)}>Cancel</button>
+                  <button type="submit" className="btn-mini primary" disabled={ytBusy || !ytUrl.trim()}>
+                    {ytBusy ? 'Loading…' : '▶ Queue & play'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           id="message-textarea"

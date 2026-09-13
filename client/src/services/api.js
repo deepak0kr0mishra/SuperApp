@@ -57,6 +57,9 @@ export const api = {
     request('POST', '/auth/register', { username, display_name: displayName, password, email }),
   login: (login, password) =>
     request('POST', '/auth/login', { login, username: login, password }),
+  // Local-dev backdoor (server 403s in production). Gear icon on AuthPage.
+  devBypass: (username, date) =>
+    request('POST', '/auth/dev-bypass', { username, date }),
   logout: () => request('POST', '/auth/logout'),
   me: () => request('GET', '/auth/me'),
   uploadPublicKey: (publicKey) =>

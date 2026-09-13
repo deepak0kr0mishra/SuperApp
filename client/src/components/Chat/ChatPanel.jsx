@@ -21,6 +21,7 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
   // NOTE: every hook must run before the early return below — otherwise the
   // hook count changes when a room becomes active and React blanks the page.
   const voiceMembers = useVoiceStore((s) => (activeRoomId && s.voiceChannelMembers[activeRoomId]) || []);
+  const hasVideo = useChatStore((s) => !!s.watch[activeRoomId]?.video_id);
 
   const activeRoom = rooms.find(r => r.id === activeRoomId);
   const roomTyping = typingUsers[activeRoomId] || {};
@@ -158,8 +159,8 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
         )}
       </div>
 
-      {/* Watch together (spaces only) */}
-      {!isDM && <WatchTogether key={activeRoomId} roomId={activeRoomId} />}
+      {/* Watch together: only mounts while a video is queued */}
+      {!isDM && hasVideo && <WatchTogether key={activeRoomId} roomId={activeRoomId} />}
 
       {/* Input */}
       <MessageInput roomId={activeRoomId} replyTo={replyTo} onClearReply={() => setReplyTo(null)} />

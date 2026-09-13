@@ -245,6 +245,13 @@ const seedRooms = () => {
     );
     rmAdmin.run();
   } catch {}
+  // Lounge model: nobody is present right after a (re)start, so drop all
+  // non-admin seats in limited rooms (holders rejoin by clicking the room).
+  try {
+    db.exec(`DELETE FROM room_members
+      WHERE room_id IN (SELECT id FROM rooms WHERE type = 'channel' AND max_members IS NOT NULL)
+      AND user_id NOT IN (SELECT id FROM users WHERE role = 'admin')`);
+  } catch {}
 };
 
 seedRooms();

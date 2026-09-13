@@ -65,6 +65,10 @@ export const useChatStore = create((set, get) => ({
     rooms: [...state.rooms.filter(r => r.id !== room.id), room],
   })),
 
+  patchRoom: (roomId, patch) => set(state => ({
+    rooms: state.rooms.map(r => (r.id === roomId ? { ...r, ...patch } : r)),
+  })),
+
   setMembers: (roomId, members) => set(state => ({
     members: { ...state.members, [roomId]: members },
   })),

@@ -5,7 +5,7 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import authRouter, { authenticateToken } from './auth.js';
-import roomsRouter, { canAccessRoom, roomFullError } from './rooms.js';
+import roomsRouter, { canAccessRoom, roomFullError, pruneLoungeMembership, emitOccupancy, setRoomsIO } from './rooms.js';
 import filesRouter from './files.js';
 import usersRouter from './users.js';
 import adminRouter from './admin.js';
@@ -346,6 +346,7 @@ io.on('connection', (socket) => {
           }
         } catch {}
         try { roomQueries.addMember.run(roomId, socket.userId); } catch {}
+        emitOccupancy(roomId, io); // seat taken → live sidebars
       }
       socket.join(`room:${roomId}`);
       // Send last 50 messages (paginated REST available for older history)
@@ -363,6 +364,8 @@ io.on('connection', (socket) => {
 
   socket.on('room:leave', ({ roomId }) => {
     socket.leave(`room:${roomId}`);
+    // Lounge rooms: switching away frees your seat (general/DMs unaffected).
+    pruneLoungeMembership(socket.userId, roomId, io, socket.id);
   });
 
   // --- Send message (plain text, validated + persisted, then broadcast) ---
@@ -542,12 +545,24 @@ io.on('connection', (socket) => {
   // --- Disconnect (multi-tab safe) ---
   socket.on('disconnect', () => {
     console.log(`✗ Disconnected: ${socket.username}`);
+    // Lounge rooms: closing/dropping frees all your seats (voice seats are
+    // freed by the voice disconnect handler; this covers text-only seats and
+    // any seat taken without a socket join, e.g. message auto-join).
+    try {
+      const mine = roomQueries.getUserRooms.all(socket.userId);
+      for (const r of mine) {
+        if (r.type === 'channel' && r.max_members != null) {
+          pruneLoungeMembership(socket.userId, r.id, io, socket.id);
+        }
+      }
+    } catch {}
     markOfflineSocket(socket.userId, socket.id);
   });
 });
 
 // Set up WebRTC voice signaling
 setupVoiceSignaling(io, connectedUsers);
+setRoomsIO(io);
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`

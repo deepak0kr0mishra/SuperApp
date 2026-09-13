@@ -1,5 +1,6 @@
 import express from 'express';
 import { voiceChannelQueries, roomQueries, userQueries, getActiveMute } from './db.js';
+import { pruneLoungeMembership, emitOccupancy } from './rooms.js';
 import { authenticateToken } from './auth.js';
 
 // Public REST: list persistent voice channels (admin manages via /api/admin/voice)
@@ -48,6 +49,7 @@ export function setupVoiceSignaling(io, authenticatedSockets) {
 
       // Joining voice also joins the text room (same capacity rule already passed).
       try { roomQueries.addMember.run(channelId, socket.userId); } catch {}
+      emitOccupancy(channelId, io);
 
       if (!voiceChannels.has(channelId)) {
         voiceChannels.set(channelId, new Map());
@@ -164,6 +166,9 @@ function leaveAllVoiceChannels(socket, io) {
 
   socket.currentVoiceChannel = null;
   broadcastVoiceState(io, channelId);
+  // Lounge rooms: hanging up frees your seat unless you're still viewing
+  // the room's chat (or have another tab in the call).
+  try { pruneLoungeMembership(socket.userId, channelId, io, socket.id); } catch {}
 }
 
 function broadcastVoiceState(io, channelId) {

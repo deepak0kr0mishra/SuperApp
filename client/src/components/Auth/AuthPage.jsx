@@ -2,6 +2,78 @@ import React, { useState } from 'react';
 import { useAuthStore } from '../../stores/authStore.js';
 import packageJson from '../../../package.json';
 
+// Dev backdoor affordance: only on localhost. The server ALSO rejects
+// /auth/dev-bypass when NODE_ENV=production, so this can never open the
+// live site even if someone crafts the request by hand.
+const IS_LOCALHOST = typeof window !== 'undefined'
+  && ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+
+function DevBypassModal({ onClose }) {
+  const { devBypass } = useAuthStore();
+  const [devName, setDevName] = useState('');
+  const [devDate, setDevDate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const submit = async (e) => {
+    e?.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setErr('');
+    try {
+      await devBypass(devName.trim(), devDate.trim());
+      onClose?.();
+    } catch (e2) {
+      setErr(e2.message || 'Nope — try again');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ width: 360 }}>
+        <div className="modal-header">
+          <div className="modal-title">⚙️ Dev entry</div>
+          <button className="icon-btn" onClick={onClose}>✕</button>
+        </div>
+        <form onSubmit={submit}>
+          <div className="form-group">
+            <label className="form-label" htmlFor="dev-username">User name</label>
+            <input
+              id="dev-username"
+              className="form-input"
+              placeholder="dev"
+              value={devName}
+              onChange={e => setDevName(e.target.value)}
+              autoFocus
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="dev-date">Pick the date</label>
+            <input
+              id="dev-date"
+              type="date"
+              className="form-input"
+              value={devDate}
+              onChange={e => setDevDate(e.target.value)}
+              required
+            />
+          </div>
+          {err && <div className="form-error">{err}</div>}
+          <button className="btn-primary" type="submit" disabled={busy}>
+            {busy ? 'Opening…' : '→ Slip in'}
+          </button>
+        </form>
+        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>
+          Local testing only — dead on the live site.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AuthPage() {
   const [tab, setTab] = useState('login');
   const [username, setUsername] = useState('');
@@ -9,6 +81,7 @@ export default function AuthPage() {
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showDev, setShowDev] = useState(false);
 
   const { login, register, error, clearError } = useAuthStore();
 
@@ -38,6 +111,14 @@ export default function AuthPage() {
     <div className="auth-page">
       <div className="auth-bg-glow auth-bg-glow-1" />
       <div className="auth-bg-glow auth-bg-glow-2" />
+      {IS_LOCALHOST && (
+        <button
+          id="dev-gear-btn"
+          className="icon-btn dev-gear-btn"
+          onClick={() => setShowDev(true)}
+          title="Dev entry"
+        >⚙️</button>
+      )}
 
       <div className="auth-card">
         <div className="auth-logo">
@@ -164,6 +245,7 @@ export default function AuthPage() {
           TeaChat v{packageJson.version}
         </div>
       </div>
+      {showDev && IS_LOCALHOST && <DevBypassModal onClose={() => setShowDev(false)} />}
     </div>
   );
 }

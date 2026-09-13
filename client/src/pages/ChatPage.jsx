@@ -98,6 +98,12 @@ async function joinRoomAndFetchMembers(socket, roomId, setMembers, previousRoomI
   } catch (err) {
     console.error('Failed to fetch members:', err);
   }
+  // Persisted watch state decides whether the Watch-together card mounts.
+  try {
+    const { watch } = await api.getWatch(roomId);
+    if (watch?.video_id) useChatStore.getState().setWatch(roomId, watch);
+    else useChatStore.getState().setWatch(roomId, { room_id: roomId, video_id: '', url: '', is_playing: 0, position: 0 });
+  } catch {}
 }
 
 function isNarrowScreen() {
@@ -205,6 +211,11 @@ export default function ChatPage() {
     const onWatch = ({ watch }) => {
       if (watch?.room_id) useChatStore.getState().setWatch(watch.room_id, watch);
     };
+    const onOccupancy = ({ roomId, count }) => {
+      if (roomId && typeof count === 'number') {
+        useChatStore.getState().patchRoom(roomId, { memberCount: count });
+      }
+    };
     const onSocketError = ({ message }) => {
       // Surface server rejections (room full, muted, blocked) without crashing.
       console.warn('Socket error:', message);
@@ -228,6 +239,7 @@ export default function ChatPage() {
     socket.on('voice:speaking', onSpeaking);
     socket.on('voice:muted', onVoiceMuted);
     socket.on('watch:update', onWatch);
+    socket.on('room:occupancy', onOccupancy);
     socket.on('error', onSocketError);
 
     return () => {
@@ -248,6 +260,7 @@ export default function ChatPage() {
       socket.off('voice:speaking', onSpeaking);
       socket.off('voice:muted', onVoiceMuted);
       socket.off('watch:update', onWatch);
+      socket.off('room:occupancy', onOccupancy);
       socket.off('error', onSocketError);
     };
   }, [user?.id]);

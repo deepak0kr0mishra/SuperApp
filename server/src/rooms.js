@@ -10,6 +10,11 @@ import { messageLimiter } from './security.js';
 
 const router = express.Router();
 
+// Socket server handle (set by index.js) so REST join/leave can also push
+// live occupancy. Socket flows emit on their own; this covers REST-only ones.
+let roomsIO = null;
+export function setRoomsIO(io) { roomsIO = io; }
+
 export function canAccessRoom(userId, roomId) {
   const room = roomQueries.findById.get(roomId);
   if (!room) return { ok: false, status: 404, error: 'Room not found' };
@@ -18,6 +23,45 @@ export function canAccessRoom(userId, roomId) {
     if (!member) return { ok: false, status: 403, error: 'You are not part of this conversation' };
   }
   return { ok: true, room };
+}
+
+// --- Lounge occupancy (limited rooms): a seat frees the moment its holder
+// stops viewing the room, hangs up, or disconnects. Unlimited rooms (general)
+// and DMs keep sticky membership. Admins never occupy seats.
+export function userHasSocketIn(userId, socketRoom, io, exceptSocketId = null) {
+  try {
+    const set = io?.sockets?.adapter?.rooms?.get(socketRoom);
+    if (!set) return false;
+    for (const sid of set) {
+      if (sid === exceptSocketId) continue;
+      const s = io.sockets.sockets.get(sid);
+      if (s?.userId === userId) return true;
+    }
+  } catch {}
+  return false;
+}
+
+// Drop a lounge seat when its holder is truly gone (no tab viewing the room
+// and none in its voice call). Emits the fresh count for live sidebars.
+export function pruneLoungeMembership(userId, roomId, io, exceptSocketId = null) {
+  try {
+    if (!userId || !roomId) return;
+    const room = roomQueries.findById.get(roomId);
+    if (!room || room.type !== 'channel' || room.max_members == null) return;
+    const me = userQueries.findById.get(userId);
+    if (!me || me.role === 'admin') return; // staff never occupy seats
+    if (userHasSocketIn(userId, `room:${roomId}`, io, exceptSocketId)) return;
+    if (userHasSocketIn(userId, `voice:${roomId}`, io, exceptSocketId)) return;
+    roomQueries.removeMember.run(roomId, userId);
+    emitOccupancy(roomId, io);
+  } catch {}
+}
+
+export function emitOccupancy(roomId, io) {
+  try {
+    const count = roomQueries.countOccupants.get(roomId)?.c ?? 0;
+    io?.emit('room:occupancy', { roomId, count });
+  } catch {}
 }
 
 // Room is full (admins bypass + don't take spots). DMs never have limits.
@@ -186,12 +230,14 @@ router.post('/:id/join', authenticateToken, (req, res) => {
     if (full) return res.status(403).json({ error: full });
   }
   roomQueries.addMember.run(req.params.id, req.user.userId);
+  emitOccupancy(req.params.id, roomsIO);
   res.json({ success: true });
 });
 
 // DELETE /api/rooms/:id/leave
 router.delete('/:id/leave', authenticateToken, (req, res) => {
   roomQueries.removeMember.run(req.params.id, req.user.userId);
+  emitOccupancy(req.params.id, roomsIO);
   res.json({ success: true });
 });
 

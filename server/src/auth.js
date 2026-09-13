@@ -152,6 +152,72 @@ router.post('/logout', authenticateToken, (req, res) => {
   res.json({ success: true });
 });
 
+// POST /api/auth/dev-bypass — LOCAL DEV ONLY. Passwordless one-tap login as
+// the `dev` user for quick testing (gear icon on the login page).
+// HARD RULES: disabled entirely when NODE_ENV=production (Render sets this,
+// so the live site always 403s even if someone crafts the request); only the
+// exact username `dev` + date `1947-08-15` works; the dev account is a plain
+// regular user, never an admin.
+router.post('/dev-bypass', authLimiter, async (req, res) => {
+  try {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ error: 'Not available' });
+    }
+    const username = String(req.body?.username || '').trim().toLowerCase();
+    const date = String(req.body?.date || '').trim().toLowerCase();
+    const dateOk = date === '1947-08-15' || date === '15aug1947';
+    if (username !== 'dev' || !dateOk) {
+      return res.status(401).json({ error: 'Invalid dev credentials' });
+    }
+    let record = userQueries.findByUsername.get('dev');
+    if (!record) {
+      const id = uuidv4();
+      let user_code = null;
+      for (let i = 0; i < 10; i++) {
+        const candidate = generateUserCode();
+        if (!userQueries.findByCode.get(candidate)) { user_code = candidate; break; }
+      }
+      if (!user_code) user_code = generateUserCode();
+      let uid = null;
+      for (let i = 0; i < 20; i++) {
+        const candidate = generateUID();
+        try {
+          if (!userQueries.findByUid.get(candidate)) { uid = candidate; break; }
+        } catch { uid = candidate; break; }
+      }
+      if (!uid) uid = generateUID();
+      const password_hash = await bcrypt.hash(uuidv4() + Date.now(), 12);
+      userQueries.create.run({
+        id,
+        uid,
+        username: 'dev',
+        email: 'dev@localhost',
+        display_name: 'Dev',
+        password_hash,
+        avatar_color: '#8b5cf6',
+        user_code,
+        bio: 'Local test pilot',
+        role: 'user',
+      });
+      const allRooms = roomQueries.findAll.all();
+      for (const room of allRooms) {
+        if (room.type === 'channel' && room.max_members == null) {
+          roomQueries.addMember.run(room.id, id);
+        }
+      }
+      record = userQueries.findByUsername.get('dev');
+    }
+    if (!record) return res.status(500).json({ error: 'Could not create dev user' });
+    if (record.is_disabled) return res.status(403).json({ error: 'Account disabled' });
+    const token = signToken({ id: record.id, username: record.username });
+    const user = userQueries.findById.get(record.id);
+    res.json({ token, user });
+  } catch (err) {
+    console.error('Dev bypass error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/auth/me
 router.get('/me', authenticateToken, (req, res) => {
   const user = userQueries.findById.get(req.user.userId);

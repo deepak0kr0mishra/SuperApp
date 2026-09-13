@@ -56,6 +56,20 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
+  // Local-dev backdoor (username `dev` + date `1947-08-15`). The server
+  // rejects this in production — the gear button hides off-localhost too.
+  devBypass: async (username, date) => {
+    try {
+      const { token, user } = await api.devBypass(username, date);
+      localStorage.setItem('sc_token', token);
+      const socket = createSocket(token);
+      set({ user, token, keyPair: null, error: null });
+      return { user, socket };
+    } catch (err) {
+      throw err;
+    }
+  },
+
   logout: () => {
     try { api.logout?.().catch(() => {}); } catch {}
     localStorage.removeItem('sc_token');
