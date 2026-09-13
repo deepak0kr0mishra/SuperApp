@@ -5,6 +5,7 @@ import { useVoiceStore } from '../../stores/voiceStore.js';
 import MessageList from './MessageList.jsx';
 import MessageInput from './MessageInput.jsx';
 import WatchTogether from './WatchTogether.jsx';
+import TicTacToe from './TicTacToe.jsx';
 
 const ROOM_ICONS = { general: '🍵', developers: '💻', creatives: '🎨', chill_01: '☕', chill_02: '☕' };
 function roomIcon(name) {
@@ -54,9 +55,12 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
   const peerStatus = peer ? (useChatStore.getState().userStatuses[peer.id] || peer.status || 'offline') : null;
 
   const roomIconEl = isDM ? null : roomIcon(activeRoom.name);
-  const limit = activeRoom.max_members ?? null;
+  // Text chat is unlimited — max_members caps the VOICE call only.
+  const voiceLimit = activeRoom.max_members ?? null;
   const roomMemberCount = roomMembers.length || activeRoom.memberCount || 0;
-  const occupancy = !isDM && limit ? `${roomMemberCount}/${limit}` : `${roomMemberCount}`;
+  const voiceCap = !isDM && voiceLimit ? `/${voiceLimit}` : '';
+  // Tic-tac-toe lives in every small chat: all DMs + every space except general.
+  const showGame = isDM || activeRoom.id !== 'general';
   // Voice lives per-room now (voice channel id == room id).
   const inThisCall = currentChannelId === activeRoomId;
   const voiceCount = voiceMembers.length;
@@ -113,8 +117,8 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
 
         <div className="topbar-actions">
           {!isDM && roomMemberCount > 0 && (
-            <span className="member-count" title={limit ? `Room limit ${limit}` : 'Unlimited room'}>
-              ✦ {occupancy} in room{voiceCount ? ` · 🔊 ${voiceCount} in call` : ''}
+            <span className="member-count" title={voiceLimit ? `Voice limit ${voiceLimit}` : 'Unlimited room'}>
+              ✦ {roomMemberCount} in room{voiceCount ? ` · 🔊 ${voiceCount}${voiceCap} in call` : ''}
             </span>
           )}
           {isDM && peer && (
@@ -127,8 +131,8 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
       {!isDM && (
         <div className="room-call-bar">
           <div className="room-call-info">
-            <span className="room-call-count">👥 {occupancy} here</span>
-            {voiceCount > 0 && <span className="room-call-live">🔊 {voiceCount} in call</span>}
+            <span className="room-call-count">👥 {roomMemberCount} here</span>
+            {voiceCount > 0 && <span className="room-call-live">🔊 {voiceCount}{voiceCap} in call</span>}
             {voiceMuted && inThisCall && (
               <span className="room-call-muted">🔇 Voice-muted (listen only)</span>
             )}
@@ -161,6 +165,9 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
 
       {/* Watch together: only mounts while a video is queued */}
       {!isDM && hasVideo && <WatchTogether key={activeRoomId} roomId={activeRoomId} />}
+
+      {/* Tic-tac-toe: DMs + every space except general */}
+      {showGame && <TicTacToe key={`ttt-${activeRoomId}`} roomId={activeRoomId} />}
 
       {/* Input */}
       <MessageInput roomId={activeRoomId} replyTo={replyTo} onClearReply={() => setReplyTo(null)} />

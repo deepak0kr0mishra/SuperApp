@@ -107,9 +107,15 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
 
   const isAdmin = user?.role === 'admin';
 
+  // Text chat is unlimited — occupancy shows the member count only.
+  // The voice call cap (room.max_members) is shown on the 🔊 live count.
   const occupancyOf = (room) => {
     const count = members[room.id]?.length ?? room.memberCount ?? 0;
-    return room.max_members ? `${count}/${room.max_members}` : `${count}`;
+    return `${count}`;
+  };
+  const voiceCountOf = (room, live) => {
+    if (!live || live.length === 0) return null;
+    return room.max_members ? `🔊${live.length}/${room.max_members}` : `🔊${live.length}`;
   };
 
   return (
@@ -206,10 +212,10 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
                 >
                   <span className="channel-icon">{channelIcon(room.name)}</span>
                   <span className="channel-name">{room.name}</span>
-                  <span className="channel-occupancy" title={room.max_members ? `Limit ${room.max_members}` : 'Unlimited'}>
+                  <span className="channel-occupancy" title={room.max_members ? `Voice limit ${room.max_members}` : 'Unlimited'}>
                     {occupancyOf(room)}
                   </span>
-                  {vmembers.length > 0 && <span className="voice-count" title={`${vmembers.length} in call`}>🔊{vmembers.length}</span>}
+                  {voiceCountOf(room, vmembers) && <span className="voice-count" title={`${vmembers.length} in call${room.max_members ? ` (limit ${room.max_members})` : ''}`}>{voiceCountOf(room, vmembers)}</span>}
                   {unread[room.id] > 0 && <span className="channel-badge">{unread[room.id]}</span>}
                 </div>
               );
@@ -231,7 +237,13 @@ export default function Sidebar({ activeTab, onTabChange, onCreateRoom, onOpenDM
         <button id="sidebar-theme-btn" className="icon-btn" onClick={toggleTheme} title={theme === 'light' ? 'Dark mode' : 'Light mode'}>
           {theme === 'light' ? '🌙' : '☀️'}
         </button>
-        <button id="sidebar-logout-btn" className="icon-btn danger" onClick={logout} title="Log out">⏻</button>
+        <button id="sidebar-logout-btn" className="icon-btn danger" onClick={logout} title="Log out" aria-label="Log out">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
+          </svg>
+        </button>
       </div>
       <div className="sidebar-user">
         <div style={{ cursor: 'pointer', display: 'flex' }} onClick={onOpenProfile} title="My profile">

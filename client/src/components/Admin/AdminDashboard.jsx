@@ -208,7 +208,7 @@ export default function AdminDashboard({ onClose }) {
     } catch (err) { flash(err.message); }
   };
 
-  const BACKUP_TABLES_CLIENT = ['users', 'rooms', 'room_members', 'messages', 'reactions', 'files', 'reports', 'room_reads', 'voice_channels', 'reaction_favorites', 'user_mutes', 'user_blocks', 'room_watch'];
+  const BACKUP_TABLES_CLIENT = ['users', 'rooms', 'room_members', 'messages', 'reactions', 'files', 'reports', 'room_reads', 'voice_channels', 'reaction_favorites', 'user_mutes', 'user_blocks', 'room_watch', 'room_games'];
 
   const backupStamp = () => {
     const d = new Date();
@@ -470,7 +470,7 @@ export default function AdminDashboard({ onClose }) {
                         </span>
                       ) : (
                         <>
-                          <div className="admin-row-title">#{r.name} <span className="admin-row-sub">({r.type}{r.max_members ? ` · max ${r.max_members}` : ''})</span></div>
+                          <div className="admin-row-title">#{r.name} <span className="admin-row-sub">({r.type}{r.max_members ? ` · voice max ${r.max_members}` : ''})</span></div>
                           <div className="admin-row-sub">{r.memberCount ?? '?'} members • {r.msgCount ?? '?'} msgs</div>
                         </>
                       )}

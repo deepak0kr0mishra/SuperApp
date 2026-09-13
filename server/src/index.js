@@ -5,7 +5,7 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import authRouter, { authenticateToken } from './auth.js';
-import roomsRouter, { canAccessRoom, roomFullError, pruneLoungeMembership, emitOccupancy, setRoomsIO } from './rooms.js';
+import roomsRouter, { canAccessRoom, emitOccupancy, setRoomsIO, applyGameMove, resetGame, emitGame } from './rooms.js';
 import filesRouter from './files.js';
 import usersRouter from './users.js';
 import adminRouter from './admin.js';
@@ -177,10 +177,8 @@ function createMessage(userId, body) {
       }
     } catch {}
   } else {
-    // Sending auto-joins public spaces — but never over the member cap
-    // (admins bypass, like everywhere else).
-    const fullMsg = roomFullError(room, userId);
-    if (fullMsg) return { error: fullMsg, status: 403 };
+    // Sending auto-joins public spaces (text chat is unlimited — voice caps
+    // are enforced separately at call-join time in voice.js).
     try { roomQueries.addMember.run(roomId, userId); } catch {}
   }
   const text = sanitizeMessageContent(
@@ -326,7 +324,7 @@ io.on('connection', (socket) => {
   // Send current voice state
   socket.emit('voice:initial_state', getVoiceChannelState());
 
-  // --- Join a text room (DM membership enforced server-side) ---
+  // --- Join a text room (DM membership enforced server-side; text unlimited) ---
   socket.on('room:join', ({ roomId }) => {
     try {
       if (!roomId) return;
@@ -336,17 +334,9 @@ io.on('connection', (socket) => {
         return;
       }
       const room = access.room;
-      // Capacity: admins bypass full rooms, everyone else is rejected.
       if (room.type === 'channel') {
-        try {
-          const fullMsg = roomFullError(room, socket.userId);
-          if (fullMsg) {
-            socket.emit('error', { message: fullMsg });
-            return;
-          }
-        } catch {}
         try { roomQueries.addMember.run(roomId, socket.userId); } catch {}
-        emitOccupancy(roomId, io); // seat taken → live sidebars
+        emitOccupancy(roomId, io); // member count changed → live sidebars
       }
       socket.join(`room:${roomId}`);
       // Send last 50 messages (paginated REST available for older history)
@@ -364,8 +354,8 @@ io.on('connection', (socket) => {
 
   socket.on('room:leave', ({ roomId }) => {
     socket.leave(`room:${roomId}`);
-    // Lounge rooms: switching away frees your seat (general/DMs unaffected).
-    pruneLoungeMembership(socket.userId, roomId, io, socket.id);
+    // Text membership is sticky — leaving the socket room never removes the
+    // DB member row (explicit Leave via REST still does).
   });
 
   // --- Send message (plain text, validated + persisted, then broadcast) ---
@@ -542,20 +532,45 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- Disconnect (multi-tab safe) ---
+  // --- Tic-tac-toe: shared board per room, broadcast to room viewers ---
+  socket.on('game:move', ({ roomId, index }) => {
+    try {
+      if (!roomId) return;
+      const access = canAccessRoom(socket.userId, roomId);
+      if (!access.ok) {
+        socket.emit('error', { message: access.error });
+        return;
+      }
+      const result = applyGameMove(roomId, socket.userId, index);
+      if (result.error) {
+        socket.emit('error', { message: result.error });
+        return;
+      }
+      emitGame(roomId, io);
+    } catch (err) {
+      console.error('game:move error:', err);
+    }
+  });
+
+  socket.on('game:reset', ({ roomId }) => {
+    try {
+      if (!roomId) return;
+      const access = canAccessRoom(socket.userId, roomId);
+      if (!access.ok) {
+        socket.emit('error', { message: access.error });
+        return;
+      }
+      resetGame(roomId);
+      emitGame(roomId, io);
+    } catch (err) {
+      console.error('game:reset error:', err);
+    }
+  });
+  // --- Disconnect (multi-tab safe; text membership is sticky) ---
   socket.on('disconnect', () => {
     console.log(`✗ Disconnected: ${socket.username}`);
-    // Lounge rooms: closing/dropping frees all your seats (voice seats are
-    // freed by the voice disconnect handler; this covers text-only seats and
-    // any seat taken without a socket join, e.g. message auto-join).
-    try {
-      const mine = roomQueries.getUserRooms.all(socket.userId);
-      for (const r of mine) {
-        if (r.type === 'channel' && r.max_members != null) {
-          pruneLoungeMembership(socket.userId, r.id, io, socket.id);
-        }
-      }
-    } catch {}
+    // Disconnect only affects presence.
+    // (Voice seats are freed by the voice disconnect handler.)
     markOfflineSocket(socket.userId, socket.id);
   });
 });

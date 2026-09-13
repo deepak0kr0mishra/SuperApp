@@ -355,7 +355,7 @@ const BACKUP_VERSION = 1;
 const BACKUP_TABLES = [
   'users', 'rooms', 'room_members', 'messages', 'reactions',
   'files', 'reports', 'room_reads', 'voice_channels', 'reaction_favorites',
-  'user_mutes', 'user_blocks', 'room_watch',
+  'user_mutes', 'user_blocks', 'room_watch', 'room_games',
 ];
 
 // Columns allowed per table on restore. Backup files are admin-supplied JSON,
@@ -374,6 +374,7 @@ const BACKUP_COLUMNS = {
   user_mutes: ['user_id', 'kind', 'expires_at', 'created_by', 'reason', 'created_at'],
   user_blocks: ['blocker_id', 'blocked_id', 'created_at'],
   room_watch: ['room_id', 'video_id', 'url', 'is_playing', 'position', 'updated_at', 'set_by'],
+  room_games: ['room_id', 'board', 'turn', 'status', 'winner', 'player_x', 'player_o', 'updated_at'],
 };
 
 // GET /api/admin/backup — download full JSON dump (admin only, see router.use)
@@ -438,7 +439,7 @@ router.post('/restore', (req, res) => {
     }
     const txn = db.transaction(() => {
       // Clear in dependency-safe order (children before parents; FKs are ON)
-      for (const t of ['reactions', 'room_reads', 'reports', 'messages', 'room_members', 'room_watch', 'user_mutes', 'user_blocks', 'files', 'rooms', 'voice_channels', 'reaction_favorites']) {
+      for (const t of ['reactions', 'room_reads', 'reports', 'messages', 'room_members', 'room_watch', 'room_games', 'user_mutes', 'user_blocks', 'files', 'rooms', 'voice_channels', 'reaction_favorites']) {
         try { db.prepare(`DELETE FROM ${t}`).run(); } catch {}
       }
       // Users: delete all except none — full replace (fixed admins re-seeded
@@ -455,7 +456,7 @@ router.post('/restore', (req, res) => {
         db.prepare(`INSERT OR REPLACE INTO ${t} (${cols.join(',')}) VALUES (${ph})`).run(...cols.map(c => row[c]));
       };
       // Insert parents before children (FKs are ON)
-      for (const t of ['users', 'rooms', 'voice_channels', 'room_members', 'files', 'messages', 'reactions', 'reports', 'room_reads', 'reaction_favorites', 'user_mutes', 'user_blocks', 'room_watch']) {
+      for (const t of ['users', 'rooms', 'voice_channels', 'room_members', 'files', 'messages', 'reactions', 'reports', 'room_reads', 'reaction_favorites', 'user_mutes', 'user_blocks', 'room_watch', 'room_games']) {
         for (const row of cleanRows[t]) insert(t, row);
       }
     });

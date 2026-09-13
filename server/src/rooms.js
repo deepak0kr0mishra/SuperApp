@@ -4,6 +4,7 @@ import {
   roomQueries, userQueries, messageQueries, readQueries,
   muteQueries, getActiveMute, blockQueries, isDMBlocked,
   watchQueries, extractYouTubeId, isFixedAdmin,
+  gameQueries, tttResult, EMPTY_TTT,
 } from './db.js';
 import { authenticateToken } from './auth.js';
 import { messageLimiter } from './security.js';
@@ -25,37 +26,10 @@ export function canAccessRoom(userId, roomId) {
   return { ok: true, room };
 }
 
-// --- Lounge occupancy (limited rooms): a seat frees the moment its holder
-// stops viewing the room, hangs up, or disconnects. Unlimited rooms (general)
-// and DMs keep sticky membership. Admins never occupy seats.
-export function userHasSocketIn(userId, socketRoom, io, exceptSocketId = null) {
-  try {
-    const set = io?.sockets?.adapter?.rooms?.get(socketRoom);
-    if (!set) return false;
-    for (const sid of set) {
-      if (sid === exceptSocketId) continue;
-      const s = io.sockets.sockets.get(sid);
-      if (s?.userId === userId) return true;
-    }
-  } catch {}
-  return false;
-}
-
-// Drop a lounge seat when its holder is truly gone (no tab viewing the room
-// and none in its voice call). Emits the fresh count for live sidebars.
-export function pruneLoungeMembership(userId, roomId, io, exceptSocketId = null) {
-  try {
-    if (!userId || !roomId) return;
-    const room = roomQueries.findById.get(roomId);
-    if (!room || room.type !== 'channel' || room.max_members == null) return;
-    const me = userQueries.findById.get(userId);
-    if (!me || me.role === 'admin') return; // staff never occupy seats
-    if (userHasSocketIn(userId, `room:${roomId}`, io, exceptSocketId)) return;
-    if (userHasSocketIn(userId, `voice:${roomId}`, io, exceptSocketId)) return;
-    roomQueries.removeMember.run(roomId, userId);
-    emitOccupancy(roomId, io);
-  } catch {}
-}
+// --- Text chat is UNLIMITED: membership is sticky, never pruned.
+// Voice caps (max_members) are enforced live in voice.js from actual call
+// participants. Kept as a no-op so older imports keep working.
+export function pruneLoungeMembership() { return; }
 
 export function emitOccupancy(roomId, io) {
   try {
@@ -64,18 +38,9 @@ export function emitOccupancy(roomId, io) {
   } catch {}
 }
 
-// Room is full (admins bypass + don't take spots). DMs never have limits.
-export function roomFullError(room, userId) {
-  if (!room || room.type === 'dm' || room.max_members == null) return null;
-  try {
-    const me = userQueries.findById.get(userId);
-    if (me?.role === 'admin') return null; // admins join even when full
-    const count = roomQueries.countOccupants.get(room.id)?.c ?? 0;
-    const already = roomQueries.isMember.get(room.id, userId);
-    if (!already && count >= room.max_members) {
-      return `Room is full (${count}/${room.max_members})`;
-    }
-  } catch {}
+// Legacy text-room cap helper — no longer enforced anywhere (text is
+// unlimited; voice caps live in voice.js). Kept exported for compat.
+export function roomFullError() {
   return null;
 }
 
@@ -217,7 +182,8 @@ router.post('/', authenticateToken, messageLimiter, (req, res) => {
   res.status(201).json({ room });
 });
 
-// POST /api/rooms/:id/join
+// POST /api/rooms/:id/join — text chat is unlimited, always succeeds
+// (DMs stay invite-only).
 router.post('/:id/join', authenticateToken, (req, res) => {
   const room = roomQueries.findById.get(req.params.id);
   if (!room) return res.status(404).json({ error: 'Room not found' });
@@ -225,9 +191,6 @@ router.post('/:id/join', authenticateToken, (req, res) => {
     // DMs are invite-only: only existing members can re-join, never strangers.
     const member = roomQueries.isMember.get(req.params.id, req.user.userId);
     if (!member) return res.status(403).json({ error: 'DMs are private' });
-  } else {
-    const full = roomFullError(room, req.user.userId);
-    if (full) return res.status(403).json({ error: full });
   }
   roomQueries.addMember.run(req.params.id, req.user.userId);
   emitOccupancy(req.params.id, roomsIO);
@@ -275,6 +238,89 @@ router.put('/:id/watch', authenticateToken, (req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'Could not save watch state' });
   }
+});
+
+// --- Tic-tac-toe (one shared board per room; DMs + spaces except general) ---
+// First mover claims X, second distinct mover claims O; only X may move on X's
+// turn and only O on O's turn. Extra spectators in group spaces can watch.
+function gameRowToWire(row, roomId) {
+  if (!row) return { room_id: roomId, ...EMPTY_TTT };
+  return {
+    room_id: row.room_id || roomId,
+    board: row.board || EMPTY_TTT.board,
+    turn: row.turn || 'X',
+    status: row.status || 'playing',
+    winner: row.winner || null,
+    player_x: row.player_x || null,
+    player_o: row.player_o || null,
+  };
+}
+
+export function emitGame(roomId, io) {
+  try {
+    const game = gameRowToWire(gameQueries.get.get(roomId), roomId);
+    (io || roomsIO)?.to(`room:${roomId}`)?.emit('game:update', { game });
+  } catch {}
+}
+
+// Returns { game } or { error, status }.
+export function applyGameMove(roomId, userId, index) {
+  const i = Number(index);
+  if (!Number.isInteger(i) || i < 0 || i > 8) {
+    return { error: 'Pick a square 1–9', status: 400 };
+  }
+  const cur = gameRowToWire(gameQueries.get.get(roomId), roomId);
+  if (cur.status !== 'playing') return { error: 'Game is over — reset to play again', status: 400 };
+  const cells = cur.board.split('');
+  if (cells[i] !== '-') return { error: 'Square already taken', status: 400 };
+  let { player_x, player_o, turn } = cur;
+  // Claim seats: first mover is X, first *other* mover is O.
+  if (!player_x) player_x = userId;
+  if (userId !== player_x && !player_o) player_o = userId;
+  const myMark = userId === player_x ? 'X' : userId === player_o ? 'O' : null;
+  if (!myMark) return { error: 'Two players already — sit back and watch', status: 403 };
+  if (myMark !== turn) return { error: `Wait your turn — ${turn} to move`, status: 400 };
+  cells[i] = myMark;
+  const board = cells.join('');
+  const { winner, draw } = tttResult(board);
+  const status = winner ? 'won' : draw ? 'draw' : 'playing';
+  const next = {
+    board,
+    turn: status === 'playing' ? (turn === 'X' ? 'O' : 'X') : turn,
+    status,
+    winner: winner || null,
+    player_x,
+    player_o,
+  };
+  gameQueries.set.run(roomId, next.board, next.turn, next.status, next.winner, next.player_x, next.player_o);
+  return { game: gameRowToWire(gameQueries.get.get(roomId), roomId) };
+}
+
+export function resetGame(roomId) {
+  try { gameQueries.clear.run(roomId); } catch {}
+  return gameRowToWire(null, roomId);
+}
+
+// GET /api/rooms/:id/game — current board (default empty board when none yet)
+router.get('/:id/game', authenticateToken, (req, res) => {
+  const access = canAccessRoom(req.user.userId, req.params.id);
+  if (!access.ok) return res.status(access.status).json({ error: access.error });
+  res.json({ game: gameRowToWire(gameQueries.get.get(req.params.id), req.params.id) });
+});
+
+// PUT /api/rooms/:id/game — { index } to move, { reset: true } to clear
+router.put('/:id/game', authenticateToken, (req, res) => {
+  const access = canAccessRoom(req.user.userId, req.params.id);
+  if (!access.ok) return res.status(access.status).json({ error: access.error });
+  if (req.body?.reset) {
+    const game = resetGame(req.params.id);
+    try { roomsIO?.to(`room:${req.params.id}`)?.emit('game:update', { game }); } catch {}
+    return res.json({ game });
+  }
+  const result = applyGameMove(req.params.id, req.user.userId, req.body?.index);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+  try { roomsIO?.to(`room:${req.params.id}`)?.emit('game:update', { game: result.game }); } catch {}
+  res.json({ game: result.game });
 });
 
 export default router;

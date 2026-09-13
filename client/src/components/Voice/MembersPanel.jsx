@@ -106,7 +106,7 @@ export default function MembersPanel() {
     <aside className="members-panel">
       <div className="members-header">
         ✦ Members — {roomMembers.length}
-        {activeRoom?.max_members ? <span className="code-chip small">max {activeRoom.max_members}</span> : null}
+        {activeRoom?.max_members ? <span className="code-chip small">voice max {activeRoom.max_members}</span> : null}
       </div>
       {notice && <div className="admin-flash" style={{ margin: '8px 12px 0' }}>{notice}</div>}
 
@@ -180,7 +180,7 @@ export default function MembersPanel() {
         )}
         {isAdmin && !isDM && (
           <div className="admin-hint" style={{ margin: '8px 12px', fontSize: 11 }}>
-            Voice 🔇 = listen-only · Chat 🚫 = DMs only. Durations: {MUTE_DURATIONS.map((d) => d.label).join(' / ')}. You join full rooms anyway.
+            Voice 🔇 = listen-only · Chat 🚫 = DMs only. Durations: {MUTE_DURATIONS.map((d) => d.label).join(' / ')}. Text chat is unlimited; voice caps apply to calls only (you bypass them).
           </div>
         )}
       </div>
@@ -200,7 +200,7 @@ export default function MembersPanel() {
               {activeRoom?.name || 'Voice'}
             </span>
             {vcMembers.length > 0 && (
-              <span className="voice-count">{vcMembers.length}</span>
+              <span className="voice-count">{activeRoom?.max_members ? `${vcMembers.length}/${activeRoom.max_members}` : vcMembers.length}</span>
             )}
           </div>
 

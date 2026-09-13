@@ -104,6 +104,11 @@ async function joinRoomAndFetchMembers(socket, roomId, setMembers, previousRoomI
     if (watch?.video_id) useChatStore.getState().setWatch(roomId, watch);
     else useChatStore.getState().setWatch(roomId, { room_id: roomId, video_id: '', url: '', is_playing: 0, position: 0 });
   } catch {}
+  // Persisted tic-tac-toe board (DMs + spaces except general).
+  try {
+    const { game } = await api.getGame(roomId);
+    if (game) useChatStore.getState().setGame(roomId, game);
+  } catch {}
 }
 
 function isNarrowScreen() {
@@ -211,6 +216,9 @@ export default function ChatPage() {
     const onWatch = ({ watch }) => {
       if (watch?.room_id) useChatStore.getState().setWatch(watch.room_id, watch);
     };
+    const onGame = ({ game }) => {
+      if (game?.room_id) useChatStore.getState().setGame(game.room_id, game);
+    };
     const onOccupancy = ({ roomId, count }) => {
       if (roomId && typeof count === 'number') {
         useChatStore.getState().patchRoom(roomId, { memberCount: count });
@@ -239,6 +247,7 @@ export default function ChatPage() {
     socket.on('voice:speaking', onSpeaking);
     socket.on('voice:muted', onVoiceMuted);
     socket.on('watch:update', onWatch);
+    socket.on('game:update', onGame);
     socket.on('room:occupancy', onOccupancy);
     socket.on('error', onSocketError);
 
@@ -260,6 +269,7 @@ export default function ChatPage() {
       socket.off('voice:speaking', onSpeaking);
       socket.off('voice:muted', onVoiceMuted);
       socket.off('watch:update', onWatch);
+      socket.off('game:update', onGame);
       socket.off('room:occupancy', onOccupancy);
       socket.off('error', onSocketError);
     };
@@ -268,8 +278,8 @@ export default function ChatPage() {
   const handleRoomSelect = async (roomId) => {
     const socket = getSocket();
     const room = rooms.find(r => r.id === roomId);
-    // Spaces enforce member caps server-side — surface "Room is full" instead
-    // of silently showing an empty room.
+    // Text chat is unlimited — join always succeeds (voice caps are checked
+    // at call-join time, not here).
     if (room && room.type === 'channel') {
       try {
         await api.joinRoom(roomId);

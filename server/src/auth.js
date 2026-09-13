@@ -92,11 +92,11 @@ router.post('/register', authLimiter, async (req, res) => {
       role,
     });
 
-    // Auto-join unlimited spaces only (general). Limited rooms
-    // (Developers/Creatives/Chill) are joined explicitly, honoring caps.
+    // Auto-join every public space (text chat is unlimited; voice caps
+    // are enforced separately at call-join time).
     const allRooms = roomQueries.findAll.all();
     for (const room of allRooms) {
-      if (room.type === 'channel' && room.max_members == null) {
+      if (room.type === 'channel') {
         roomQueries.addMember.run(room.id, id);
       }
     }
@@ -201,7 +201,7 @@ router.post('/dev-bypass', authLimiter, async (req, res) => {
       });
       const allRooms = roomQueries.findAll.all();
       for (const room of allRooms) {
-        if (room.type === 'channel' && room.max_members == null) {
+        if (room.type === 'channel') {
           roomQueries.addMember.run(room.id, id);
         }
       }

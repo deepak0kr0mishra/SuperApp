@@ -1,6 +1,6 @@
 import express from 'express';
 import { voiceChannelQueries, roomQueries, userQueries, getActiveMute } from './db.js';
-import { pruneLoungeMembership, emitOccupancy } from './rooms.js';
+import { emitOccupancy } from './rooms.js';
 import { authenticateToken } from './auth.js';
 
 // Public REST: list persistent voice channels (admin manages via /api/admin/voice)
@@ -18,26 +18,32 @@ voiceRouter.get('/', authenticateToken, (req, res) => {
 // Map of voice channel → Set of user socket IDs
 const voiceChannels = new Map();
 
+// Number of users currently in a voice call (the ONLY capped count —
+// text chat is unlimited, so max_members limits voice seats, not members).
+export function getVoiceCount(channelId) {
+  try {
+    return voiceChannels.get(channelId)?.size ?? 0;
+  } catch { return 0; }
+}
+
 export function setupVoiceSignaling(io, authenticatedSockets) {
   io.on('connection', (socket) => {
     // --- Join voice channel ---
     socket.on('voice:join', ({ channelId }) => {
       if (!socket.userId) return;
 
-      // Capacity mirrors the chat room limit (voice id == room id for spaces).
-      // Admins bypass full rooms; voice-mute still joins (listen-only).
-      // Admin staff don't take member spots.
+      // Voice-only capacity: max_members caps CALL participants (admins bypass).
+      // Text membership is unlimited and never blocks a call join.
       try {
         const room = roomQueries.findById.get(channelId);
         if (room && room.type === 'channel' && room.max_members != null) {
           const me = userQueries.findById.get(socket.userId);
           const isAdmin = me?.role === 'admin';
           if (!isAdmin) {
-            const count = roomQueries.countOccupants.get(channelId)?.c ?? 0;
-            const already = roomQueries.isMember.get(channelId, socket.userId);
             const inVoice = voiceChannels.get(channelId)?.has(socket.userId);
-            if (!already && !inVoice && count >= room.max_members) {
-              socket.emit('error', { message: `Voice room is full (${count}/${room.max_members})` });
+            const count = getVoiceCount(channelId);
+            if (!inVoice && count >= room.max_members) {
+              socket.emit('error', { message: `Voice call is full (${count}/${room.max_members})` });
               return;
             }
           }
@@ -47,7 +53,7 @@ export function setupVoiceSignaling(io, authenticatedSockets) {
       // Leave any existing voice channel first
       leaveAllVoiceChannels(socket, io);
 
-      // Joining voice also joins the text room (same capacity rule already passed).
+      // Joining voice also joins the text room (always allowed — unlimited).
       try { roomQueries.addMember.run(channelId, socket.userId); } catch {}
       emitOccupancy(channelId, io);
 
@@ -166,9 +172,7 @@ function leaveAllVoiceChannels(socket, io) {
 
   socket.currentVoiceChannel = null;
   broadcastVoiceState(io, channelId);
-  // Lounge rooms: hanging up frees your seat unless you're still viewing
-  // the room's chat (or have another tab in the call).
-  try { pruneLoungeMembership(socket.userId, channelId, io, socket.id); } catch {}
+  // Text membership is sticky — hanging up never removes the member row.
 }
 
 function broadcastVoiceState(io, channelId) {

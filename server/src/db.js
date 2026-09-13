@@ -165,6 +165,20 @@ db.exec(`
     set_by TEXT,
     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
   );
+
+  -- Tic-tac-toe: one shared board per room (DMs + spaces except general).
+  -- board is 9 chars of '-'/'X'/'O'; player_x/player_o claim seats on first move.
+  CREATE TABLE IF NOT EXISTS room_games (
+    room_id TEXT PRIMARY KEY,
+    board TEXT NOT NULL DEFAULT '---------',
+    turn TEXT NOT NULL DEFAULT 'X',
+    status TEXT NOT NULL DEFAULT 'playing',
+    winner TEXT,
+    player_x TEXT,
+    player_o TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+  );
 `);
 
 // --- Lightweight migrations for existing DBs ---
@@ -193,6 +207,11 @@ try { db.exec(`CREATE TABLE IF NOT EXISTS room_watch (
   room_id TEXT PRIMARY KEY, video_id TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '',
   is_playing INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()), set_by TEXT)`); } catch {}
+try { db.exec(`CREATE TABLE IF NOT EXISTS room_games (
+  room_id TEXT PRIMARY KEY, board TEXT NOT NULL DEFAULT '---------',
+  turn TEXT NOT NULL DEFAULT 'X', status TEXT NOT NULL DEFAULT 'playing',
+  winner TEXT, player_x TEXT, player_o TEXT,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()))`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(room_id, created_at DESC)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at DESC)`); } catch {}
@@ -201,14 +220,14 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_users_search ON users(username, us
 // recent reaction per message (highest rowid = latest insert).
 try { db.exec(`DELETE FROM reactions WHERE rowid NOT IN (SELECT MAX(rowid) FROM reactions GROUP BY message_id, user_id)`); } catch {}
 
-// Fixed space layout: general (unlimited) + Developers(6) + Creatives(6) +
-// Chill_01(2) + Chill_02(2). Voice runs per-space (voice channel id == room id).
+// Fixed space layout: general + Developers + Creatives + Chill_01 + Chill_02.
+// Text chat is UNLIMITED everywhere — max_members is the VOICE call cap only.
 export const SPACE_DEFS = [
   { id: 'general', name: 'general', description: 'General chat for everyone', max_members: null },
-  { id: 'developers', name: 'Developers', description: 'Builders room (max 6)', max_members: 6 },
-  { id: 'creatives', name: 'Creatives', description: 'Creatives room (max 6)', max_members: 6 },
-  { id: 'chill-01', name: 'Chill_01', description: 'Chill duo (max 2)', max_members: 2 },
-  { id: 'chill-02', name: 'Chill_02', description: 'Chill duo (max 2)', max_members: 2 },
+  { id: 'developers', name: 'Developers', description: 'Builders room · voice max 6', max_members: 6 },
+  { id: 'creatives', name: 'Creatives', description: 'Creatives room · voice max 6', max_members: 6 },
+  { id: 'chill-01', name: 'Chill_01', description: 'Chill duo · voice max 2', max_members: 2 },
+  { id: 'chill-02', name: 'Chill_02', description: 'Chill duo · voice max 2', max_members: 2 },
 ];
 const LEGACY_SPACE_IDS = ['media', 'audio', 'random'];
 const LEGACY_VOICE_IDS = ['voice-general', 'voice-gaming', 'voice-study'];
@@ -228,30 +247,24 @@ const seedRooms = () => {
   for (const ch of SPACE_DEFS) {
     insertRoom.run(ch.id, ch.name, ch.description, 'channel', ch.max_members, systemId);
   }
-  // Enforce names/limits on every boot (rename-safe), then drop legacy spaces.
+  // Enforce names/limits on every boot (rename-safe), then drop legacy spaces
+  // (media/audio/random) with all their membership/history so they never reappear.
   try {
     const upd = db.prepare('UPDATE rooms SET name = ?, description = ?, max_members = ? WHERE id = ?');
     for (const ch of SPACE_DEFS) upd.run(ch.name, ch.description, ch.max_members, ch.id);
   } catch {}
   try {
+    const legacyPh = LEGACY_SPACE_IDS.map(() => '?').join(',');
+    db.prepare(`DELETE FROM room_members WHERE room_id IN (${legacyPh})`).run(...LEGACY_SPACE_IDS);
+    db.prepare(`DELETE FROM messages WHERE room_id IN (${legacyPh})`).run(...LEGACY_SPACE_IDS);
+    db.prepare(`DELETE FROM room_reads WHERE room_id IN (${legacyPh})`).run(...LEGACY_SPACE_IDS);
+    db.prepare(`DELETE FROM room_watch WHERE room_id IN (${legacyPh})`).run(...LEGACY_SPACE_IDS);
+    db.prepare(`DELETE FROM room_games WHERE room_id IN (${legacyPh})`).run(...LEGACY_SPACE_IDS);
     const del = db.prepare('DELETE FROM rooms WHERE id = ?');
     for (const legacy of LEGACY_SPACE_IDS) del.run(legacy);
   } catch {}
-  // Free member spots in limited rooms: fixed-admin staff don't occupy them.
-  try {
-    const rmAdmin = db.prepare(
-      `DELETE FROM room_members WHERE room_id IN ('developers','creatives','chill-01','chill-02')
-       AND user_id IN ('admin-01','admin-02','admin-03','admin-04','admin-05')`
-    );
-    rmAdmin.run();
-  } catch {}
-  // Lounge model: nobody is present right after a (re)start, so drop all
-  // non-admin seats in limited rooms (holders rejoin by clicking the room).
-  try {
-    db.exec(`DELETE FROM room_members
-      WHERE room_id IN (SELECT id FROM rooms WHERE type = 'channel' AND max_members IS NOT NULL)
-      AND user_id NOT IN (SELECT id FROM users WHERE role = 'admin')`);
-  } catch {}
+  // Text chat is unlimited: membership is sticky (never pruned on boot).
+  // Voice caps are enforced live from actual call participants (see voice.js).
 };
 
 seedRooms();
@@ -402,11 +415,10 @@ const seedFixedAdmins = () => {
           db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(hash, existing.id);
         }
       }
-      // Fixed admins belong to every UNLIMITED public channel (general).
-      // Limited rooms (Developers/Creatives/Chill) keep their member spots for
-      // regular users — admins can still join anytime (capacity bypass).
+      // Fixed admins belong to every public channel (text chat is unlimited,
+      // voice caps are enforced separately at call-join time with admin bypass).
       try {
-        const channels = db.prepare(`SELECT id FROM rooms WHERE type = 'channel' AND max_members IS NULL`).all();
+        const channels = db.prepare(`SELECT id FROM rooms WHERE type = 'channel'`).all();
         const add = db.prepare('INSERT OR IGNORE INTO room_members (room_id, user_id) VALUES (?, ?)');
         for (const ch of channels) add.run(ch.id, existing?.id || id);
       } catch {}
@@ -749,6 +761,43 @@ export const watchQueries = {
     'UPDATE room_watch SET is_playing = ?, position = ?, updated_at = unixepoch() WHERE room_id = ?'
   ),
   clear: db.prepare('DELETE FROM room_watch WHERE room_id = ?'),
+};
+
+// --- Tic-tac-toe (one shared board per room) ---
+const TTT_LINES = [
+  [0, 1, 2], [3, 4, 5], [6, 7, 8],
+  [0, 3, 6], [1, 4, 7], [2, 5, 8],
+  [0, 4, 8], [2, 4, 6],
+];
+
+// Returns { winner: 'X'|'O'|null, line: number[]|null, draw: boolean }
+export function tttResult(board) {
+  const b = String(board || '---------').padEnd(9, '-').slice(0, 9);
+  for (const line of TTT_LINES) {
+    const [a, c, d] = line;
+    if (b[a] !== '-' && b[a] === b[c] && b[c] === b[d]) {
+      return { winner: b[a], line, draw: false };
+    }
+  }
+  return { winner: null, line: null, draw: !b.includes('-') };
+}
+
+export const EMPTY_TTT = {
+  board: '---------', turn: 'X', status: 'playing',
+  winner: null, player_x: null, player_o: null,
+};
+
+export const gameQueries = {
+  get: db.prepare('SELECT * FROM room_games WHERE room_id = ?'),
+  set: db.prepare(`
+    INSERT INTO room_games (room_id, board, turn, status, winner, player_x, player_o, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
+    ON CONFLICT(room_id) DO UPDATE SET board = excluded.board, turn = excluded.turn,
+      status = excluded.status, winner = excluded.winner,
+      player_x = excluded.player_x, player_o = excluded.player_o,
+      updated_at = unixepoch()
+  `),
+  clear: db.prepare('DELETE FROM room_games WHERE room_id = ?'),
 };
 
 export { generateUserCode };
