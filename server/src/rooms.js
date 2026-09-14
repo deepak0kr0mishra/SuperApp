@@ -1,9 +1,7 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import {
-  roomQueries, userQueries, messageQueries, readQueries,
-  blockQueries, isDMBlocked, watchQueries, extractYouTubeId, isFixedAdmin,
-  gameQueries, tttResult, EMPTY_TTT,
+  blockQueries, isDMBlocked, isFixedAdmin,
 } from './db.js';
 import { authenticateToken } from './auth.js';
 import { messageLimiter } from './security.js';
@@ -207,118 +205,6 @@ router.delete('/:id/leave', authenticateToken, async (req, res) => {
   } catch { res.json({ success: true }); }
 });
 
-// GET /api/rooms/:id/watch
-router.get('/:id/watch', authenticateToken, async (req, res) => {
-  try {
-    const access = await canAccessRoom(req.user.userId, req.params.id);
-    if (!access.ok) return res.status(access.status).json({ error: access.error });
-    const state = await watchQueries.get.get(req.params.id);
-    res.json({ watch: state || { room_id: req.params.id, video_id: '', url: '', is_playing: 0, position: 0 } });
-  } catch {
-    res.json({ watch: { room_id: req.params.id, video_id: '', url: '', is_playing: 0, position: 0 } });
-  }
-});
 
-// PUT /api/rooms/:id/watch
-router.put('/:id/watch', authenticateToken, async (req, res) => {
-  try {
-    const access = await canAccessRoom(req.user.userId, req.params.id);
-    if (!access.ok) return res.status(access.status).json({ error: access.error });
-    const { url, videoId, is_playing, position } = req.body || {};
-    const raw = String(videoId || url || '').slice(0, 500);
-    if (!raw) {
-      try { await watchQueries.clear.run(req.params.id); } catch {}
-      return res.json({ watch: { room_id: req.params.id, video_id: '', url: '', is_playing: 0, position: 0 } });
-    }
-    const video_id = extractYouTubeId(raw);
-    if (!video_id) return res.status(400).json({ error: 'Send a valid YouTube link or 11-char video id' });
-    const playing = is_playing ? 1 : 0;
-    const pos = Math.max(0, Math.min(Number(position) || 0, 86400));
-    await watchQueries.set.run(req.params.id, video_id, `https://www.youtube.com/watch?v=${video_id}`, playing, pos, req.user.userId);
-    res.json({ watch: await watchQueries.get.get(req.params.id) });
-  } catch (err) {
-    res.status(500).json({ error: 'Could not save watch state' });
-  }
-});
-
-// --- Tic-tac-toe ---
-function gameRowToWire(row, roomId) {
-  if (!row) return { room_id: roomId, ...EMPTY_TTT };
-  return {
-    room_id: row.room_id || roomId,
-    board: row.board || EMPTY_TTT.board,
-    turn: row.turn || 'X',
-    status: row.status || 'playing',
-    winner: row.winner || null,
-    player_x: row.player_x || null,
-    player_o: row.player_o || null,
-  };
-}
-
-export async function emitGame(roomId, io) {
-  try {
-    const game = gameRowToWire(await gameQueries.get.get(roomId), roomId);
-    (io || roomsIO)?.to(`room:${roomId}`)?.emit('game:update', { game });
-  } catch {}
-}
-
-export async function applyGameMove(roomId, userId, index) {
-  const i = Number(index);
-  if (!Number.isInteger(i) || i < 0 || i > 8) return { error: 'Pick a square 1–9', status: 400 };
-  const cur = gameRowToWire(await gameQueries.get.get(roomId), roomId);
-  if (cur.status !== 'playing') return { error: 'Game is over — reset to play again', status: 400 };
-  const cells = cur.board.split('');
-  if (cells[i] !== '-') return { error: 'Square already taken', status: 400 };
-  let { player_x, player_o, turn } = cur;
-  if (!player_x) player_x = userId;
-  if (userId !== player_x && !player_o) player_o = userId;
-  const myMark = userId === player_x ? 'X' : userId === player_o ? 'O' : null;
-  if (!myMark) return { error: 'Two players already — sit back and watch', status: 403 };
-  if (myMark !== turn) return { error: `Wait your turn — ${turn} to move`, status: 400 };
-  cells[i] = myMark;
-  const board = cells.join('');
-  const { winner, draw } = tttResult(board);
-  const status = winner ? 'won' : draw ? 'draw' : 'playing';
-  const next = {
-    board, turn: status === 'playing' ? (turn === 'X' ? 'O' : 'X') : turn,
-    status, winner: winner || null, player_x, player_o,
-  };
-  await gameQueries.set.run(roomId, next.board, next.turn, next.status, next.winner, next.player_x, next.player_o);
-  return { game: gameRowToWire(await gameQueries.get.get(roomId), roomId) };
-}
-
-export async function resetGame(roomId) {
-  try { await gameQueries.clear.run(roomId); } catch {}
-  return gameRowToWire(null, roomId);
-}
-
-// GET /api/rooms/:id/game
-router.get('/:id/game', authenticateToken, async (req, res) => {
-  try {
-    const access = await canAccessRoom(req.user.userId, req.params.id);
-    if (!access.ok) return res.status(access.status).json({ error: access.error });
-    res.json({ game: gameRowToWire(await gameQueries.get.get(req.params.id), req.params.id) });
-  } catch { res.status(500).json({ error: 'Failed' }); }
-});
-
-// PUT /api/rooms/:id/game
-router.put('/:id/game', authenticateToken, async (req, res) => {
-  try {
-    const access = await canAccessRoom(req.user.userId, req.params.id);
-    if (!access.ok) return res.status(access.status).json({ error: access.error });
-    if (req.body?.reset) {
-      const game = await resetGame(req.params.id);
-      try { roomsIO?.to(`room:${req.params.id}`)?.emit('game:update', { game }); } catch {}
-      return res.json({ game });
-    }
-    const result = await applyGameMove(req.params.id, req.user.userId, req.body?.index);
-    if (result.error) return res.status(result.status).json({ error: result.error });
-    try { roomsIO?.to(`room:${req.params.id}`)?.emit('game:update', { game: result.game }); } catch {}
-    res.json({ game: result.game });
-  } catch (err) {
-    console.error('PUT /game error:', err);
-    res.status(500).json({ error: 'Game error' });
-  }
-});
 
 export default router;

@@ -4,8 +4,7 @@ import { useAuthStore } from '../../stores/authStore.js';
 import { useVoiceStore } from '../../stores/voiceStore.js';
 import MessageList from './MessageList.jsx';
 import MessageInput from './MessageInput.jsx';
-import WatchTogether from './WatchTogether.jsx';
-import TicTacToe from './TicTacToe.jsx';
+
 
 const ROOM_ICONS = { general: '🍵', developers: '💻', creatives: '🎨', chill_01: '☕', chill_02: '☕' };
 function roomIcon(name) {
@@ -22,7 +21,7 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
   // NOTE: every hook must run before the early return below — otherwise the
   // hook count changes when a room becomes active and React blanks the page.
   const voiceMembers = useVoiceStore((s) => (activeRoomId && s.voiceChannelMembers[activeRoomId]) || []);
-  const hasVideo = useChatStore((s) => !!s.watch[activeRoomId]?.video_id);
+
 
   const activeRoom = rooms.find(r => r.id === activeRoomId);
   const roomTyping = typingUsers[activeRoomId] || {};
@@ -59,8 +58,7 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
   const voiceLimit = activeRoom.max_members ?? null;
   const roomMemberCount = roomMembers.length || activeRoom.memberCount || 0;
   const voiceCap = !isDM && voiceLimit ? `/${voiceLimit}` : '';
-  // Tic-tac-toe lives in every small chat: all DMs + every space except general.
-  const showGame = isDM || activeRoom.id !== 'general';
+
   // Voice lives per-room now (voice channel id == room id).
   const inThisCall = currentChannelId === activeRoomId;
   const voiceCount = voiceMembers.length;
@@ -163,11 +161,7 @@ export default function ChatPanel({ onOpenSearch, onOpenProfile, onToggleSidebar
         )}
       </div>
 
-      {/* Watch together: only mounts while a video is queued */}
-      {!isDM && hasVideo && <WatchTogether key={activeRoomId} roomId={activeRoomId} />}
 
-      {/* Tic-tac-toe: DMs + every space except general */}
-      {showGame && <TicTacToe key={`ttt-${activeRoomId}`} roomId={activeRoomId} />}
 
       {/* Input */}
       <MessageInput roomId={activeRoomId} replyTo={replyTo} onClearReply={() => setReplyTo(null)} />

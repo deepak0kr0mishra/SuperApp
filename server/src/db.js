@@ -259,28 +259,7 @@ await exec(`
     FOREIGN KEY (blocked_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
-  CREATE TABLE IF NOT EXISTS room_watch (
-    room_id TEXT PRIMARY KEY,
-    video_id TEXT NOT NULL DEFAULT '',
-    url TEXT NOT NULL DEFAULT '',
-    is_playing INTEGER NOT NULL DEFAULT 0,
-    position INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    set_by TEXT,
-    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
-  );
 
-  CREATE TABLE IF NOT EXISTS room_games (
-    room_id TEXT PRIMARY KEY,
-    board TEXT NOT NULL DEFAULT '---------',
-    turn TEXT NOT NULL DEFAULT 'X',
-    status TEXT NOT NULL DEFAULT 'playing',
-    winner TEXT,
-    player_x TEXT,
-    player_o TEXT,
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
-  );
 
   CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id);
@@ -355,7 +334,7 @@ const seedRooms = async () => {
 
   // Remove legacy spaces
   for (const legacyId of LEGACY_SPACE_IDS) {
-    for (const table of ['room_members', 'messages', 'room_reads', 'room_watch', 'room_games']) {
+    for (const table of ['room_members', 'messages', 'room_reads']) {
       try { await client.execute({ sql: `DELETE FROM ${table} WHERE room_id = ?`, args: [legacyId] }); } catch {}
     }
     try { await client.execute({ sql: 'DELETE FROM rooms WHERE id = ?', args: [legacyId] }); } catch {}
@@ -796,78 +775,7 @@ export async function isDMBlocked(a, b) {
   } catch { return false; }
 }
 
-export function extractYouTubeId(input) {
-  if (!input || typeof input !== 'string') return '';
-  const s = input.trim();
-  if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
-  try {
-    const u = new URL(s);
-    const host = u.hostname.replace(/^www\./, '').toLowerCase();
-    if (host === 'youtu.be') {
-      const id = u.pathname.slice(1).split(/[?#/]/)[0];
-      return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : '';
-    }
-    if (host.endsWith('youtube.com')) {
-      const v = u.searchParams.get('v');
-      if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
-      const parts = u.pathname.split('/').filter(Boolean);
-      const idx = parts.findIndex((p) => ['embed', 'shorts', 'live'].includes(p));
-      if (idx >= 0 && parts[idx + 1] && /^[A-Za-z0-9_-]{11}$/.test(parts[idx + 1])) return parts[idx + 1];
-    }
-  } catch {}
-  return '';
-}
 
-export const watchQueries = {
-  get: stmt('SELECT * FROM room_watch WHERE room_id = ?'),
-  set: stmt(`
-    INSERT INTO room_watch (room_id, video_id, url, is_playing, position, updated_at, set_by)
-    VALUES (?, ?, ?, ?, ?, unixepoch(), ?)
-    ON CONFLICT(room_id) DO UPDATE SET video_id = excluded.video_id, url = excluded.url,
-      is_playing = excluded.is_playing, position = excluded.position,
-      updated_at = unixepoch(), set_by = excluded.set_by
-  `),
-  updateState: stmt('UPDATE room_watch SET is_playing = ?, position = ?, updated_at = unixepoch() WHERE room_id = ?'),
-  clear: stmt('DELETE FROM room_watch WHERE room_id = ?'),
-};
-
-// ---------------------------------------------------------------------------
-// Tic-tac-toe
-// ---------------------------------------------------------------------------
-const TTT_LINES = [
-  [0, 1, 2], [3, 4, 5], [6, 7, 8],
-  [0, 3, 6], [1, 4, 7], [2, 5, 8],
-  [0, 4, 8], [2, 4, 6],
-];
-
-export function tttResult(board) {
-  const b = String(board || '---------').padEnd(9, '-').slice(0, 9);
-  for (const line of TTT_LINES) {
-    const [a, c, d] = line;
-    if (b[a] !== '-' && b[a] === b[c] && b[c] === b[d]) {
-      return { winner: b[a], line, draw: false };
-    }
-  }
-  return { winner: null, line: null, draw: !b.includes('-') };
-}
-
-export const EMPTY_TTT = {
-  board: '---------', turn: 'X', status: 'playing',
-  winner: null, player_x: null, player_o: null,
-};
-
-export const gameQueries = {
-  get: stmt('SELECT * FROM room_games WHERE room_id = ?'),
-  set: stmt(`
-    INSERT INTO room_games (room_id, board, turn, status, winner, player_x, player_o, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
-    ON CONFLICT(room_id) DO UPDATE SET board = excluded.board, turn = excluded.turn,
-      status = excluded.status, winner = excluded.winner,
-      player_x = excluded.player_x, player_o = excluded.player_o,
-      updated_at = unixepoch()
-  `),
-  clear: stmt('DELETE FROM room_games WHERE room_id = ?'),
-};
 
 export { generateUserCode };
 

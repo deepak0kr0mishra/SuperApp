@@ -31,8 +31,7 @@ export const useChatStore = create((set, get) => ({
   unread: {},         // roomId → count
   allUsers: [],
   voiceChannels: [],
-  watch: {},        // roomId → { video_id, url, is_playing, position, ... }
-  games: {},        // roomId → { board, turn, status, winner, player_x, player_o }
+
   myMutes: [],      // my active mutes [{ kind, expires_at, ... }]
   myBlocks: [],     // users I blocked
 
@@ -49,13 +48,7 @@ export const useChatStore = create((set, get) => ({
 
   setAllUsers: (users) => set({ allUsers: users }),
 
-  setWatch: (roomId, watch) => set(state => ({
-    watch: { ...state.watch, [roomId]: watch },
-  })),
 
-  setGame: (roomId, game) => set(state => ({
-    games: { ...state.games, [roomId]: game },
-  })),
 
   setMyMutes: (mutes) => set({ myMutes: mutes || [] }),
 

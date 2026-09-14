@@ -129,14 +129,6 @@ export const api = {
   // Voice channels (persistent list)
   getVoiceChannels: () => request('GET', '/voice'),
 
-  // Watch together (one shared YouTube video per room)
-  getWatch: (roomId) => request('GET', `/rooms/${roomId}/watch`),
-  setWatch: (roomId, payload) => request('PUT', `/rooms/${roomId}/watch`, payload),
-
-  // Tic-tac-toe (one shared board per room)
-  getGame: (roomId) => request('GET', `/rooms/${roomId}/game`),
-  gameMove: (roomId, index) => request('PUT', `/rooms/${roomId}/game`, { index }),
-  resetGame: (roomId) => request('PUT', `/rooms/${roomId}/game`, { reset: true }),
 
   // Files
   uploadFile: async (file, roomId, onProgress) => {

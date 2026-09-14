@@ -4,7 +4,7 @@ import { useAuthStore } from '../../stores/authStore.js';
 import { useChatStore } from '../../stores/chatStore.js';
 import { getSocket } from '../../services/socket.js';
 import { api } from '../../services/api.js';
-import { findYouTubeId } from '../../utils/youtube.js';
+
 
 // --- Typing indicator hook ---
 function useTypingIndicator(roomId) {
@@ -49,17 +49,18 @@ export function classifyFile(file, forceMime) {
 export default function MessageInput({ roomId, replyTo, onClearReply }) {
   const [text, setText] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null);
   const [sendError, setSendError] = useState('');
-  const [showYT, setShowYT] = useState(false);
-  const [ytUrl, setYtUrl] = useState('');
-  const [ytBusy, setYtBusy] = useState(false);
-  const [ytError, setYtError] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
 
   const textareaRef = useRef(null);
-  const fileInputRef = useRef(null);
   const emojiRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const recordingTimerRef = useRef(null);
 
   const { rooms, myMutes } = useChatStore();
   const { startTyping, stopTyping } = useTypingIndicator(roomId);
@@ -97,19 +98,7 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
         type: 'text',
         replyTo: replyTo?.id || null,
       });
-      // YouTube link in a space chat → same as Watch-together queue.
-      try {
-        const room = rooms.find((r) => r.id === roomId);
-        if (room && room.type !== 'dm') {
-          const vid = findYouTubeId(content);
-          if (vid) {
-            api.setWatch(roomId, { videoId: vid, is_playing: true, position: 0 }).then(({ watch }) => {
-              if (watch?.video_id) useChatStore.getState().setWatch(roomId, watch);
-            }).catch(() => {});
-            socket.emit('watch:set', { roomId, videoId: vid });
-          }
-        }
-      } catch {}
+
     } catch (err) {
       console.error('Send error:', err);
       setSendError('Failed to send. Try again.');
@@ -176,29 +165,64 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
     setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
-  // Queue a YouTube video into the room's Watch-together player.
-  const queueYouTube = async (e) => {
-    e?.preventDefault();
-    const raw = ytUrl.trim();
-    if (!raw || !roomId || ytBusy) return;
-    setYtBusy(true);
-    setYtError('');
+
+
+  const startRecording = async () => {
     try {
-      const { watch } = await api.setWatch(roomId, { url: raw, is_playing: true, position: 0 });
-      if (watch?.video_id) {
-        useChatStore.getState().setWatch(roomId, watch);
-        getSocket()?.emit('watch:set', { roomId, url: raw });
-        setYtUrl('');
-        setShowYT(false);
-      } else {
-        setYtError('Could not queue that link');
-      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      mediaRecorderRef.current.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorderRef.current.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const file = new File([audioBlob], `Voice_Message_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`, { type: 'audio/webm' });
+        sendFile(file, 'audio/webm');
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorderRef.current.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingTime(prev => prev + 1);
+      }, 1000);
     } catch (err) {
-      setYtError(err.message || 'Send a valid YouTube link');
-    } finally {
-      setYtBusy(false);
+      console.error('Microphone access denied or error:', err);
+      setSendError('Microphone access denied');
     }
   };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      clearInterval(recordingTimerRef.current);
+    }
+  };
+
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.onstop = null; // Prevent upload
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      setIsRecording(false);
+      clearInterval(recordingTimerRef.current);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      if (mediaRecorderRef.current?.state === 'recording') {
+        mediaRecorderRef.current.stop();
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
 
   const activeRoom = rooms.find(r => r.id === roomId);
   const chatMute = (myMutes || []).find(m => m.kind === 'chat');
@@ -248,39 +272,24 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
           className="input-action-btn"
           onClick={() => fileInputRef.current?.click()}
           title="Attach photo, video, or file"
-          disabled={uploading}
+          disabled={uploading || isRecording}
         >📎</button>
-        {activeRoom?.type !== 'dm' && (
-          <div style={{ position: 'relative' }}>
-            <button
-              id="yt-queue-btn"
-              className="input-action-btn"
-              onClick={() => { setShowYT(v => !v); setYtError(''); }}
-              title="Watch together — queue a YouTube video"
-              disabled={uploading}
-            >📺</button>
-            {showYT && (
-              <form className="yt-popup" onSubmit={queueYouTube}>
-                <div className="yt-popup-title">📺 Watch together</div>
-                <input
-                  className="form-input"
-                  placeholder="Paste a YouTube link…"
-                  value={ytUrl}
-                  onChange={(e) => setYtUrl(e.target.value)}
-                  maxLength={500}
-                  autoFocus
-                />
-                {ytError && <div className="form-error" style={{ margin: '8px 0 0' }}>{ytError}</div>}
-                <div className="yt-popup-actions">
-                  <button type="button" className="btn-mini" onClick={() => setShowYT(false)}>Cancel</button>
-                  <button type="submit" className="btn-mini primary" disabled={ytBusy || !ytUrl.trim()}>
-                    {ytBusy ? 'Loading…' : '▶ Queue & play'}
-                  </button>
-                </div>
-              </form>
-            )}
+        {isRecording ? (
+          <div className="recording-ui" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 8px', color: 'var(--danger)', fontWeight: 'bold' }}>
+            <span className="recording-dot" style={{ animation: 'live-pulse 1s infinite' }}>🔴</span>
+            <span>{Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}</span>
+            <button className="icon-btn" onClick={cancelRecording} title="Cancel" style={{ marginLeft: 'auto', color: 'var(--text-muted)' }}>✕</button>
+            <button className="icon-btn" onClick={stopRecording} title="Send" style={{ color: 'var(--brand)' }}>➤</button>
           </div>
+        ) : (
+          <button
+            className="input-action-btn"
+            onClick={startRecording}
+            title="Record Voice Message"
+            disabled={uploading}
+          >🎤</button>
         )}
+
         <textarea
           ref={textareaRef}
           id="message-textarea"
@@ -289,7 +298,7 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           rows={1}
-          disabled={uploading}
+          disabled={uploading || isRecording}
           maxLength={2000}
         />
         <div className="input-actions">
@@ -310,7 +319,7 @@ export default function MessageInput({ roomId, replyTo, onClearReply }) {
             id="send-message-btn"
             className="send-btn"
             onClick={sendTextMessage}
-            disabled={!text.trim() || uploading}
+            disabled={!text.trim() || uploading || isRecording}
             title="Send message (Enter)"
           >➤</button>
         </div>

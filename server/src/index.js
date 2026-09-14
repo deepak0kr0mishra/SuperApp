@@ -5,14 +5,14 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import authRouter, { authenticateToken } from './auth.js';
-import roomsRouter, { canAccessRoom, emitOccupancy, setRoomsIO, applyGameMove, resetGame, emitGame } from './rooms.js';
+import roomsRouter, { canAccessRoom, emitOccupancy, setRoomsIO } from './rooms.js';
 import filesRouter from './files.js';
 import usersRouter from './users.js';
 import adminRouter from './admin.js';
 import reportsRouter from './reports.js';
 import {
   messageQueries, roomQueries, userQueries, readQueries,
-  replaceReaction, isChatMuted, isDMBlocked, watchQueries, extractYouTubeId,
+  replaceReaction, isChatMuted, isDMBlocked,
   MESSAGE_MAX_LENGTH,
 } from './db.js';
 import { setupVoiceSignaling, getVoiceChannelState, voiceRouter } from './voice.js';
@@ -448,74 +448,7 @@ io.on('connection', (socket) => {
     io.emit('room:new', room);
   });
 
-  // Watch together
-  const emitWatch = async (roomId) => {
-    try {
-      const state = await watchQueries.get.get(roomId);
-      if (state) io.to(`room:${roomId}`).emit('watch:update', { watch: state });
-    } catch {}
-  };
 
-  socket.on('watch:set', async ({ roomId, url, videoId }) => {
-    try {
-      if (!roomId) return;
-      const access = await canAccessRoom(socket.userId, roomId);
-      if (!access.ok) { socket.emit('error', { message: access.error }); return; }
-      const raw = String(videoId || url || '').slice(0, 500);
-      if (!raw) {
-        try { await watchQueries.clear.run(roomId); } catch {}
-        io.to(`room:${roomId}`).emit('watch:update', { watch: { room_id: roomId, video_id: '', url: '', is_playing: 0, position: 0 } });
-        return;
-      }
-      const vid = extractYouTubeId(raw);
-      if (!vid) { socket.emit('error', { message: 'Send a valid YouTube link' }); return; }
-      await watchQueries.set.run(roomId, vid, `https://www.youtube.com/watch?v=${vid}`, 1, 0, socket.userId);
-      await emitWatch(roomId);
-    } catch (err) {
-      console.error('watch:set error:', err);
-    }
-  });
-
-  socket.on('watch:state', async ({ roomId, is_playing, position }) => {
-    try {
-      if (!roomId) return;
-      const access = await canAccessRoom(socket.userId, roomId);
-      if (!access.ok) return;
-      const cur = await watchQueries.get.get(roomId);
-      if (!cur?.video_id) return;
-      const pos = Math.max(0, Math.min(Number(position) || 0, 86400));
-      await watchQueries.updateState.run(is_playing ? 1 : 0, pos, roomId);
-      await emitWatch(roomId);
-    } catch (err) {
-      console.error('watch:state error:', err);
-    }
-  });
-
-  // Tic-tac-toe
-  socket.on('game:move', async ({ roomId, index }) => {
-    try {
-      if (!roomId) return;
-      const access = await canAccessRoom(socket.userId, roomId);
-      if (!access.ok) { socket.emit('error', { message: access.error }); return; }
-      const result = await applyGameMove(roomId, socket.userId, index);
-      if (result.error) { socket.emit('error', { message: result.error }); return; }
-      await emitGame(roomId, io);
-    } catch (err) {
-      console.error('game:move error:', err);
-    }
-  });
-
-  socket.on('game:reset', async ({ roomId }) => {
-    try {
-      if (!roomId) return;
-      const access = await canAccessRoom(socket.userId, roomId);
-      if (!access.ok) { socket.emit('error', { message: access.error }); return; }
-      await resetGame(roomId);
-      await emitGame(roomId, io);
-    } catch (err) {
-      console.error('game:reset error:', err);
-    }
-  });
 
   socket.on('disconnect', () => {
     console.log(`✗ Disconnected: ${socket.username}`);
